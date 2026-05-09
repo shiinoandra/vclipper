@@ -80,3 +80,59 @@ class Setting(db.Model):
         for k, v in defaults.items():
             if Setting.get(k) is None:
                 Setting.set(k, v)
+
+
+class TrackedChannel(db.Model):
+    __tablename__ = "tracked_channels"
+
+    id = db.Column(db.Integer, primary_key=True)
+    channel_id = db.Column(db.String(100), unique=True, nullable=False)
+    channel_name = db.Column(db.String(200))
+    avatar_url = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "channel_id": self.channel_id,
+            "channel_name": self.channel_name,
+            "avatar_url": self.avatar_url,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class LiveStream(db.Model):
+    __tablename__ = "live_streams"
+
+    id = db.Column(db.Integer, primary_key=True)
+    video_id = db.Column(db.String(20), unique=True, nullable=False)
+    channel_id = db.Column(db.Integer, db.ForeignKey("tracked_channels.id"))
+    title = db.Column(db.String(500))
+    thumbnail_url = db.Column(db.String(500))
+    scheduled_start = db.Column(db.DateTime)
+    actual_start = db.Column(db.DateTime)
+    actual_end = db.Column(db.DateTime)
+    status = db.Column(db.String(20), default="upcoming")
+    video_url = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    channel = db.relationship("TrackedChannel", backref="streams")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "video_id": self.video_id,
+            "channel_id": self.channel_id,
+            "channel_name": self.channel.channel_name if self.channel else None,
+            "channel_avatar": self.channel.avatar_url if self.channel else None,
+            "title": self.title,
+            "thumbnail_url": self.thumbnail_url,
+            "scheduled_start": self.scheduled_start.isoformat() if self.scheduled_start else None,
+            "actual_start": self.actual_start.isoformat() if self.actual_start else None,
+            "actual_end": self.actual_end.isoformat() if self.actual_end else None,
+            "status": self.status,
+            "video_url": self.video_url,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }

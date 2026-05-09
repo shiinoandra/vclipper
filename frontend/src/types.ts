@@ -35,3 +35,31 @@ export interface Settings {
   default_output_dir?: string;
   [key: string]: string | undefined;
 }
+
+export interface TrackedChannel {
+  id: number;
+  channel_id: string;
+  channel_name?: string;
+  avatar_url?: string;
+  created_at?: string;
+}
+
+export interface LiveStream {
+  id: number;
+  video_id: string;
+  channel_id: number;
+  channel_name?: string;
+  channel_avatar?: string;
+  title?: string;
+  thumbnail_url?: string;
+  scheduled_start?: string;
+  actual_start?: string;
+  actual_end?: string;
+  status: 'live' | 'upcoming' | 'ended';
+  video_url?: string;
+}
+
+export interface LiveStreamGroup {
+  date: string;
+  streams: LiveStream[];
+}

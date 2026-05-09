@@ -6,7 +6,7 @@ import subprocess
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from config import Config
-from models import db, Clip, Setting
+from models import db, Clip, Setting, TrackedChannel, LiveStream
 
 def create_app():
     app = Flask(__name__)
@@ -609,6 +609,325 @@ def update_settings():
 @app.route("/api/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
+
+
+# ─── Tracked Channels ───
+
+@app.route("/api/channels", methods=["GET"])
+def list_channels():
+    channels = TrackedChannel.query.order_by(TrackedChannel.channel_name).all()
+    return jsonify([c.to_dict() for c in channels])
+
+
+def _extract_channel_id_from_url(url: str) -> str | None:
+    """Parse a YouTube URL and return a canonical channel page URL."""
+    import re
+
+    # Channel ID directly: /channel/UC...
+    m = re.search(r"youtube\.com/channel/(UC[\w-]+)", url)
+    if m:
+        return m.group(1)
+
+    # Handle: @name
+    m = re.search(r"youtube\.com/@([\w.]+)", url)
+    if m:
+        return f"@{m.group(1)}"
+
+    # Custom URL: /c/Name or /user/Name
+    m = re.search(r"youtube\.com/(c|user)/([\w.]+)", url)
+    if m:
+        return f"{m.group(1)}/{m.group(2)}"
+
+    # Video URL — can't extract channel from URL alone, return None to signal yt-dlp needed
+    return None
+
+
+@app.route("/api/channels", methods=["POST"])
+def add_channel():
+    import yt_dlp
+    data = request.get_json() or {}
+    url = data.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "URL is required"}), 400
+
+    channel_id = None
+    channel_name = None
+    avatar_url = None
+
+    # Try to extract channel identifier from URL patterns first
+    channel_ident = _extract_channel_id_from_url(url)
+
+    if channel_ident:
+        # Build a canonical channel videos page URL
+        if channel_ident.startswith("UC"):
+            channel_url = f"https://www.youtube.com/channel/{channel_ident}/videos"
+        elif channel_ident.startswith("@"):
+            channel_url = f"https://www.youtube.com/{channel_ident}/videos"
+        else:
+            channel_url = f"https://www.youtube.com/{channel_ident}/videos"
+
+        # Extract channel metadata via yt-dlp on the channel page
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "playlistend": 1,
+            "ignore_no_formats_error": True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(channel_url, download=False)
+        except Exception as e:
+            return jsonify({"error": f"Could not fetch channel: {e}"}), 400
+
+        channel_id = info.get("channel_id") or info.get("uploader_id")
+        channel_name = info.get("channel") or info.get("uploader")
+        avatar_url = info.get("thumbnails", [{}])[-1].get("url", "") if info.get("thumbnails") else ""
+
+    else:
+        # Fallback: try the original URL (might be a video URL).
+        # Use ignore_no_formats_error so restricted videos don't blow up.
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "ignore_no_formats_error": True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            return jsonify({"error": f"Could not extract info: {e}"}), 400
+
+        channel_id = info.get("channel_id") or info.get("uploader_id")
+        channel_name = info.get("channel") or info.get("uploader")
+        avatar_url = info.get("thumbnails", [{}])[-1].get("url", "") if info.get("thumbnails") else ""
+
+    if not channel_id or not channel_id.startswith("UC"):
+        return jsonify({"error": "Could not extract valid YouTube channel ID"}), 400
+
+    # Check for duplicate
+    existing = TrackedChannel.query.filter_by(channel_id=channel_id).first()
+    if existing:
+        return jsonify(existing.to_dict()), 200
+
+    channel = TrackedChannel(
+        channel_id=channel_id,
+        channel_name=channel_name or channel_id,
+        avatar_url=avatar_url or "",
+    )
+    db.session.add(channel)
+    db.session.commit()
+
+    # Trigger an immediate poll for this channel's streams in the background
+    def _poll_new_channel():
+        with app.app_context():
+            try:
+                _check_channel_uploads(channel)
+                print(f"[Poller] Immediate poll completed for {channel.channel_name}")
+            except Exception as e:
+                print(f"[Poller] Immediate poll failed for {channel.channel_name}: {e}")
+
+    threading.Thread(target=_poll_new_channel, daemon=True).start()
+
+    return jsonify(channel.to_dict()), 201
+
+
+@app.route("/api/channels/<int:channel_db_id>", methods=["DELETE"])
+def delete_channel(channel_db_id):
+    channel = TrackedChannel.query.get_or_404(channel_db_id)
+    # Also delete associated streams
+    LiveStream.query.filter_by(channel_id=channel.id).delete()
+    db.session.delete(channel)
+    db.session.commit()
+    return jsonify({"deleted": True})
+
+
+# ─── Live Streams ───
+
+@app.route("/api/live", methods=["GET"])
+def list_live_streams():
+    """Return live streams grouped by date."""
+    from datetime import datetime, timedelta
+
+    # Show streams from last 3 days + currently live + upcoming
+    cutoff = datetime.utcnow() - timedelta(days=3)
+
+    streams = LiveStream.query.filter(
+        (LiveStream.status == "live") |
+        (LiveStream.status == "upcoming") |
+        (LiveStream.actual_start >= cutoff)
+    ).order_by(LiveStream.actual_start.desc().nullsfirst(), LiveStream.scheduled_start.desc().nullsfirst()).all()
+
+    # Group by date (using actual_start or scheduled_start)
+    groups = {}
+    for s in streams:
+        dt = s.actual_start or s.scheduled_start
+        if not dt:
+            continue
+        date_key = dt.strftime("%Y-%m-%d")
+        if date_key not in groups:
+            groups[date_key] = []
+        groups[date_key].append(s.to_dict())
+
+    # Sort dates descending
+    sorted_groups = [
+        {"date": k, "streams": groups[k]}
+        for k in sorted(groups.keys(), reverse=True)
+    ]
+    return jsonify(sorted_groups)
+
+
+# ─── Live Stream Poller ───
+
+_live_poller_thread = None
+_live_poller_stop = threading.Event()
+
+
+def _poll_live_streams():
+    import yt_dlp
+    from datetime import datetime, timezone
+
+    while not _live_poller_stop.is_set():
+        try:
+            with app.app_context():
+                channels = TrackedChannel.query.all()
+                for channel in channels:
+                    if _live_poller_stop.is_set():
+                        break
+                    try:
+                        _check_channel_uploads(channel)
+                    except Exception as e:
+                        print(f"[Poller] Error checking channel {channel.channel_id}: {e}")
+        except Exception as e:
+            print(f"[Poller] Error: {e}")
+
+        # Sleep for 5 minutes, checking stop event every second
+        for _ in range(300):
+            if _live_poller_stop.is_set():
+                break
+            time.sleep(1)
+
+
+def _process_channel_entries(channel, entries):
+    """Process a list of yt-dlp entries and upsert LiveStream records."""
+    from datetime import datetime, timezone
+
+    for entry in entries:
+        if not entry or not entry.get("id"):
+            continue
+
+        video_id = entry["id"]
+        live_status = entry.get("live_status")  # 'is_live', 'was_live', 'is_upcoming', 'not_live'
+        is_live = entry.get("is_live", False)
+
+        # Skip regular uploads that were never live
+        if live_status == "not_live" and not is_live:
+            continue
+
+        # Determine stream status
+        if is_live or live_status == "is_live":
+            status = "live"
+        elif live_status == "is_upcoming":
+            status = "upcoming"
+        else:
+            status = "ended"
+
+        # Parse timestamps
+        actual_start = None
+        actual_end = None
+        scheduled_start = None
+
+        ts = entry.get("timestamp")
+        if ts:
+            actual_start = datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
+
+        release_ts = entry.get("release_timestamp")
+        if release_ts:
+            scheduled_start = datetime.fromtimestamp(release_ts, tz=timezone.utc).replace(tzinfo=None)
+
+        # For ended streams, estimate end time
+        if status == "ended" and actual_start:
+            duration = entry.get("duration", 0)
+            if duration and ts:
+                actual_end = datetime.fromtimestamp(ts + duration, tz=timezone.utc).replace(tzinfo=None)
+
+        # Upsert live stream record
+        stream = LiveStream.query.filter_by(video_id=video_id).first()
+        if stream:
+            stream.status = status
+            if actual_start:
+                stream.actual_start = actual_start
+            if actual_end:
+                stream.actual_end = actual_end
+            if scheduled_start:
+                stream.scheduled_start = scheduled_start
+            stream.title = entry.get("title", stream.title)
+            stream.thumbnail_url = entry.get("thumbnail", stream.thumbnail_url)
+        else:
+            stream = LiveStream(
+                video_id=video_id,
+                channel_id=channel.id,
+                title=entry.get("title", ""),
+                thumbnail_url=entry.get("thumbnail", ""),
+                scheduled_start=scheduled_start,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                status=status,
+                video_url=f"https://www.youtube.com/watch?v={video_id}",
+            )
+            db.session.add(stream)
+
+    db.session.commit()
+
+
+def _check_channel_uploads(channel):
+    """Check /streams tab first (live/upcoming), then /videos (uploads).
+    Uses ignore_no_formats_error so future/upcoming streams don't crash extraction."""
+    import yt_dlp
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "playlistend": 15,
+        "extract_flat": False,
+        "ignore_no_formats_error": True,
+    }
+
+    # 1. Check /streams tab — this is where live and upcoming streams appear
+    streams_url = f"https://www.youtube.com/channel/{channel.channel_id}/streams"
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(streams_url, download=False)
+        entries = info.get("entries", [])
+        if entries:
+            _process_channel_entries(channel, entries)
+            return
+    except Exception as e:
+        print(f"[Poller] /streams failed for {channel.channel_id}: {e}")
+
+    # 2. Fallback to /videos tab
+    videos_url = f"https://www.youtube.com/channel/{channel.channel_id}/videos"
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(videos_url, download=False)
+        entries = info.get("entries", [])
+        if entries:
+            _process_channel_entries(channel, entries)
+    except Exception as e:
+        print(f"[Poller] /videos failed for {channel.channel_id}: {e}")
+
+
+def _start_live_poller():
+    global _live_poller_thread
+    if _live_poller_thread is None or not _live_poller_thread.is_alive():
+        _live_poller_stop.clear()
+        _live_poller_thread = threading.Thread(target=_poll_live_streams, daemon=True)
+        _live_poller_thread.start()
+        print("[Poller] Live stream poller started")
+
+
+# Start the poller when the app initializes
+_start_live_poller()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

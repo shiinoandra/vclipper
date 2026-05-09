@@ -1,4 +1,5 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import YouTubePlayer from '../components/YouTubePlayer';
 import Timeline from '../components/Timeline';
 import ClipQueue from '../components/ClipQueue';
@@ -13,7 +14,10 @@ function extractVideoId(url: string): string | null {
 }
 
 export default function ClipPage() {
-  const [url, setUrl] = useState('');
+  const [searchParams] = useSearchParams();
+  const initialUrl = searchParams.get('url') || '';
+
+  const [url, setUrl] = useState(initialUrl);
   const [videoId, setVideoId] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -22,7 +26,7 @@ export default function ClipPage() {
   const [processing, setProcessing] = useState(false);
   const playerApiRef = useRef<{ seekTo: (t: number) => void; getCurrentTime: () => number; getDuration: () => number } | null>(null);
 
-  const loadVideo = () => {
+  const loadVideo = useCallback(() => {
     const id = extractVideoId(url);
     if (id) {
       setVideoId(id);
@@ -31,7 +35,14 @@ export default function ClipPage() {
       setSegments([]);
       setPendingStart(null);
     }
-  };
+  }, [url]);
+
+  // Auto-load video if URL was passed via query param
+  useEffect(() => {
+    if (initialUrl && !videoId) {
+      loadVideo();
+    }
+  }, [initialUrl, loadVideo, videoId]);
 
   const handleReady = useCallback((api: any) => {
     playerApiRef.current = api;

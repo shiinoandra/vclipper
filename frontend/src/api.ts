@@ -1,4 +1,4 @@
-import type { Clip, Settings } from './types';
+import type { Clip, Settings, TrackedChannel, LiveStreamGroup } from './types';
 
 const API_BASE = '/api';
 
@@ -61,4 +61,27 @@ export function connectProgressSSE(clipId: number, onProgress: (val: string) => 
     evtSource.close();
   };
   return () => evtSource.close();
+}
+
+// ─── Channels ───
+
+export async function listChannels(): Promise<TrackedChannel[]> {
+  return fetchJson<TrackedChannel[]>(`${API_BASE}/channels`);
+}
+
+export async function addChannel(url: string): Promise<TrackedChannel> {
+  return fetchJson<TrackedChannel>(`${API_BASE}/channels`, {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+  });
+}
+
+export async function deleteChannel(id: number): Promise<void> {
+  await fetch(`${API_BASE}/channels/${id}`, { method: 'DELETE' });
+}
+
+// ─── Live Streams ───
+
+export async function listLiveStreams(): Promise<LiveStreamGroup[]> {
+  return fetchJson<LiveStreamGroup[]>(`${API_BASE}/live`);
 }
