@@ -6,7 +6,7 @@ export interface Clip {
   end_time: number;
   quality: string;
   video_codec?: string;
-  audio_quality?: string;
+  audio_bitrate?: string;
   download_thumbnail: boolean;
   download_cc: boolean;
   output_dir: string;
@@ -26,14 +26,14 @@ export interface ClipSegment {
   end: number;
   color: string;
   quality: string;
-  audioQuality: string;
+  audioBitrate: string;
   downloadCC: boolean;
 }
 
 export interface Settings {
   default_quality?: string;
   default_video_codec?: string;
-  default_audio_quality?: string;
+  default_audio_bitrate?: string;
   download_thumbnail?: string;
   default_output_dir?: string;
   [key: string]: string | undefined;

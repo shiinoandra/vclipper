@@ -12,12 +12,12 @@ const VIDEO_QUALITIES = [
   { label: 'Worst available', value: 'worst' },
 ];
 
-const AUDIO_QUALITIES = [
+const AUDIO_BITRATES = [
   { label: 'Default (128k AAC)', value: 'default' },
-  { label: 'Best audio', value: 'bestaudio' },
-  { label: 'High (256k)', value: 'bestaudio[abr<=256]' },
-  { label: 'Medium (128k)', value: 'bestaudio[abr<=128]' },
-  { label: 'Worst audio', value: 'worstaudio' },
+  { label: '96 kbps', value: '96' },
+  { label: '128 kbps', value: '128' },
+  { label: '192 kbps', value: '192' },
+  { label: '256 kbps', value: '256' },
 ];
 
 export default function SettingsPage() {
@@ -103,13 +103,13 @@ export default function SettingsPage() {
           </div>
 
           <div style={{ marginBottom: 16 }}>
-            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Default Audio Quality</label>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Default Audio Bitrate</label>
             <select
-              value={settings.default_audio_quality || 'default'}
-              onChange={(e) => handleChange('default_audio_quality', e.target.value)}
+              value={settings.default_audio_bitrate || 'default'}
+              onChange={(e) => handleChange('default_audio_bitrate', e.target.value)}
               style={{ width: '100%', padding: '8px 10px', borderRadius: 4, border: '1px solid #d1d5db', fontSize: 14 }}
             >
-              {AUDIO_QUALITIES.map((q) => (
+              {AUDIO_BITRATES.map((q) => (
                 <option key={q.value} value={q.value}>{q.label}</option>
               ))}
             </select>

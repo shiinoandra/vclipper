@@ -101,3 +101,26 @@ export async function listLiveStreams(tag?: string): Promise<LiveStreamGroup[]> 
   const qs = tag ? `?tag=${encodeURIComponent(tag)}` : '';
   return fetchJson<LiveStreamGroup[]>(`${API_BASE}/live${qs}`);
 }
+
+// ─── Subtitles ───
+
+export async function getSubtitles(clipId: number): Promise<string> {
+  const res = await fetch(`${API_BASE}/clips/${clipId}/subtitles`);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || res.statusText);
+  }
+  return res.text();
+}
+
+export async function updateSubtitles(clipId: number, content: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/clips/${clipId}/subtitles`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    body: content,
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || res.statusText);
+  }
+}

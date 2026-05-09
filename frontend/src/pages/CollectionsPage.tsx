@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { listClips, deleteClip, retryClip, getDownloadUrl, getWatchUrl } from '../api';
+import { listClips, deleteClip, retryClip, getDownloadUrl, getWatchUrl, getSubtitles, updateSubtitles } from '../api';
 import { formatTime, formatDuration } from '../utils/time';
 import type { Clip } from '../types';
-import { Monitor, Volume2, Subtitles } from 'lucide-react';
+import { Monitor, Volume2, Subtitles, PenLine } from 'lucide-react';
+import SubtitleEditorModal from '../components/SubtitleEditorModal';
 
 function getYouTubeThumbnail(url: string): string {
   const m = url.match(/(?:v=|\/)([0-9A-Za-z_-]{11})/);
@@ -110,6 +111,9 @@ function MediaInfoPanel({ clip }: { clip: Clip }) {
 export default function CollectionsPage() {
   const [clips, setClips] = useState<Clip[]>([]);
   const [watching, setWatching] = useState<Clip | null>(null);
+  const [editingClip, setEditingClip] = useState<Clip | null>(null);
+  const [editingSrt, setEditingSrt] = useState<string>('');
+  const [loadingSrt, setLoadingSrt] = useState(false);
 
   const load = async () => {
     const data = await listClips();
@@ -133,6 +137,30 @@ export default function CollectionsPage() {
       load();
     } catch (e: any) {
       alert('Retry failed: ' + e.message);
+    }
+  };
+
+  const handleEditSubtitles = async (clip: Clip) => {
+    setLoadingSrt(true);
+    try {
+      const srt = await getSubtitles(clip.id);
+      setEditingSrt(srt);
+      setEditingClip(clip);
+    } catch (e: any) {
+      alert('Failed to load subtitles: ' + e.message);
+    } finally {
+      setLoadingSrt(false);
+    }
+  };
+
+  const handleSaveSubtitles = async (srt: string) => {
+    if (!editingClip) return;
+    try {
+      await updateSubtitles(editingClip.id, srt);
+      // Refresh clip list to update has_cc status
+      load();
+    } catch (e: any) {
+      alert('Failed to save subtitles: ' + e.message);
     }
   };
 
@@ -205,6 +233,29 @@ export default function CollectionsPage() {
 
                   <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                     {canDownload && (
+                      <button
+                        onClick={() => handleEditSubtitles(clip)}
+                        disabled={loadingSrt}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '6px 14px',
+                          borderRadius: 4,
+                          border: '1px solid #d1d5db',
+                          background: '#fff',
+                          color: '#111',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: loadingSrt ? 'not-allowed' : 'pointer',
+                          opacity: loadingSrt ? 0.6 : 1,
+                        }}
+                      >
+                        <PenLine size={13} />
+                        Edit Subtitle
+                      </button>
+                    )}
+                    {canDownload && (
                       <a
                         href={getDownloadUrl(clip.id)}
                         download
@@ -265,6 +316,19 @@ export default function CollectionsPage() {
       )}
 
       {watching && <VideoModal clip={watching} onClose={() => setWatching(null)} />}
+
+      {editingClip && (
+        <SubtitleEditorModal
+          clipId={editingClip.id}
+          title={editingClip.title}
+          initialSrt={editingSrt}
+          onSave={handleSaveSubtitles}
+          onClose={() => {
+            setEditingClip(null);
+            setEditingSrt('');
+          }}
+        />
+      )}
     </div>
   );
 }

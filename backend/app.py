@@ -48,27 +48,24 @@ def _clear_progress(clip_id):
         _progress.pop(clip_id, None)
 
 
-def _resolve_format(quality, audio_quality, settings):
+def _resolve_format(quality, settings):
     """Resolve 'default' to a yt-dlp format string with MP4/M4A preference for efficient ffmpeg seeking.
     
     Uses separate DASH streams (bestvideo+bestaudio) for quality.
     Forces MP4/M4A containers because ffmpeg HTTP seeking is much faster on MP4 than WebM.
+    Audio is always bestaudio[ext=m4a] — output bitrate is controlled separately via ffmpeg.
     """
     q = quality or settings.get("default_quality", "default")
-    aq = audio_quality or settings.get("default_audio_quality", "default")
 
-    # Resolve 'default' to hardcoded safe values
+    # Resolve 'default' to hardcoded safe value
     if q == "default":
         q = "bestvideo[height<=720]"
-    if aq == "default":
-        aq = "bestaudio[abr<=128]"
 
     # Pure audio-only selection (e.g. "bestaudio")
     if q.startswith("bestaudio") or q.startswith("worstaudio"):
         return f"{q}[ext=m4a]/{q}"
 
     # Convert combined-format selectors to video-only so we can pair them with audio.
-    # 'best' alone means "best combined format" which is usually 640x360 on YouTube.
     def _to_video_selector(fmt):
         if fmt.startswith("bestvideo") or fmt.startswith("worstvideo"):
             return fmt
@@ -76,7 +73,6 @@ def _resolve_format(quality, audio_quality, settings):
             return "bestvideo"
         if fmt == "worst":
             return "worstvideo"
-        # 'best[height<=720]' or similar → prepend 'bestvideo'
         if fmt.startswith("best["):
             return fmt.replace("best[", "bestvideo[", 1)
         if fmt.startswith("worst["):
@@ -84,11 +80,19 @@ def _resolve_format(quality, audio_quality, settings):
         return fmt
 
     video_sel = _to_video_selector(q)
-    audio_sel = aq if (aq.startswith("bestaudio") or aq.startswith("worstaudio")) else "bestaudio"
 
-    # Simple format string: DASH video+audio with MP4/M4A preference, fallback to combined MP4.
-    # Do NOT add extra / fallbacks before the + — yt-dlp evaluates / before +.
-    return f"{video_sel}[ext=mp4]+{audio_sel}[ext=m4a]/best[ext=mp4]/best"
+    # Always pick best audio in M4A container. Output bitrate is set by ffmpeg -b:a.
+    return f"{video_sel}[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+
+
+def _resolve_audio_bitrate(clip, settings):
+    """Return audio bitrate in kbps for ffmpeg -b:a."""
+    br = clip.audio_bitrate or settings.get("default_audio_bitrate", "128")
+    try:
+        int(br)
+        return br
+    except (ValueError, TypeError):
+        return "128"
 
 
 def _parse_srt_time(t):
@@ -260,17 +264,34 @@ def _detect_cc(output_path):
     return os.path.exists(srt_path) and os.path.getsize(srt_path) > 0
 
 
-def _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event):
-    """Strategy A: Extract DASH URLs and invoke ffmpeg with input-seeking.
-    Returns the output file path on success, raises Exception on failure."""
+def _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event, audio_bitrate):
+    """Strategy A: Two-step window download for perfect A/V sync.
+
+    Step 1 — Download a padded window (start-10s to end+10s) via ffmpeg
+             with -c:v copy and -c:a aac. Audio re-encode forces fresh
+             timestamps aligned to the video timeline, eliminating DASH
+             seek-point drift.
+
+    Step 2 — Local -c copy cut from the synced window file. Since the
+             window is a local file with correct sync, the cut is exact.
+
+    Returns the output file path on success, raises Exception on failure.
+    """
     import yt_dlp
 
     duration = clip.end_time - clip.start_time
+    window_pad = 10.0  # seconds of padding before / after target segment
+    window_start = max(0.0, clip.start_time - window_pad)
+    window_duration = duration + (window_pad * 2)
+    cut_offset = clip.start_time - window_start
+
+    tmp_window = os.path.join(output_dir, f"_window_{clip.id}.mp4")
     tmp_path = os.path.join(output_dir, f"_clip_{clip.id}.mp4")
 
-    # Clean up any stale output
-    if os.path.exists(tmp_path):
-        os.remove(tmp_path)
+    # Clean up stale files
+    for f in [tmp_window, tmp_path]:
+        if os.path.exists(f):
+            os.remove(f)
 
     # 1. Extract format URLs without downloading
     info_opts = {
@@ -280,72 +301,87 @@ def _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event):
     }
     with yt_dlp.YoutubeDL(info_opts) as ydl:
         info = ydl.extract_info(clip.youtube_url, download=False)
-
-        # yt-dlp returns separate DASH formats in 'requested_formats' when using "video+audio".
-        # For combined formats it returns a single format in the root info dict.
         requested = info.get("requested_formats", [])
 
-        if len(requested) >= 2:
-            # DASH: separate video and audio streams
-            video_url = requested[0].get("url")
-            audio_url = requested[1].get("url")
-        elif len(requested) == 1:
-            # Single requested format (combined or video-only)
-            video_url = requested[0].get("url")
-            audio_url = None
+        def _get_direct_url(fmt_info):
+            url = fmt_info.get("url")
+            if url:
+                return url
+            fragment_base = fmt_info.get("fragment_base_url")
+            if fragment_base:
+                return fragment_base
+            return None
+
+        video_url = None
+        audio_url = None
+
+        if requested:
+            video_fmts = [f for f in requested if f.get("vcodec", "none") != "none"]
+            audio_fmts = [f for f in requested if f.get("acodec", "none") != "none"]
+            if video_fmts:
+                video_url = _get_direct_url(video_fmts[0])
+            if audio_fmts:
+                audio_url = _get_direct_url(audio_fmts[0])
+            if not video_url and requested:
+                video_url = _get_direct_url(requested[0])
         elif info.get("url"):
-            # Fallback: combined format selected directly
             video_url = info["url"]
-            audio_url = None
-        else:
-            raise Exception("Strategy A: no format URL available from yt-dlp")
 
         if not video_url:
-            raise Exception("Strategy A: could not extract video URL")
+            raise Exception("Strategy A: no format URL available from yt-dlp")
 
-        # Extract media metadata
+        print(f"[Strategy A] Video URL: {video_url[:80]}...")
+        if audio_url:
+            print(f"[Strategy A] Audio URL: {audio_url[:80]}...")
+        else:
+            print("[Strategy A] Using combined format (no separate audio)")
+
         clip.title = info.get("title", clip.title or "Untitled")
         resolution, audio_codec = _extract_media_info(info, clip)
         clip.video_resolution = resolution
         clip.audio_codec = audio_codec
 
-    # 2. Build ffmpeg command with input-seeking
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
-
-    # Video input (input-seeking: -ss before -i)
-    cmd += [
-        "-ss", str(clip.start_time),
-        "-t", str(duration),
+    # ── Step 1: Download padded window with audio re-encode ──
+    window_cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-fflags", "+discardcorrupt",
+        "-rw_timeout", "10000000",
+        "-ss", str(window_start),
+        "-t", str(window_duration),
         "-i", video_url,
     ]
-
-    # Audio input (if separate)
     if audio_url:
-        cmd += [
-            "-ss", str(clip.start_time),
-            "-t", str(duration),
+        window_cmd += [
+            "-ss", str(window_start),
+            "-t", str(window_duration),
             "-i", audio_url,
         ]
 
-    # Output options
-    cmd += ["-c", "copy"]
+    # Re-encode audio to AAC — this generates fresh timestamps aligned
+    # to the video timeline, eliminating DASH seek-point drift.
+    window_cmd += [
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", f"{audio_bitrate}k",
+    ]
     if audio_url:
-        cmd += ["-map", "0:v:0", "-map", "1:a:0"]
-    cmd += [
+        window_cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+    window_cmd += [
         "-avoid_negative_ts", "make_zero",
         "-movflags", "+faststart",
-        tmp_path,
+        "-shortest",
+        tmp_window,
     ]
 
-    # 3. Run ffmpeg with polling for cancellation
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    print(f"[Strategy A] Step 1: window {window_start:.1f}s - {window_start+window_duration:.1f}s (pad={window_pad}s)")
 
-    stderr_data = b""
+    proc = subprocess.Popen(window_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
     start_time = time.time()
+    max_wait_seconds = 180  # 3 min — window is only slightly larger than clip
+    last_size = 0
+    stalled_count = 0
+
     while proc.poll() is None:
         if cancel_event.is_set():
             proc.terminate()
@@ -353,28 +389,93 @@ def _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event):
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            for f in [tmp_window, tmp_path]:
+                if os.path.exists(f):
+                    os.remove(f)
             raise Exception("Cancelled by user")
 
-        # Fake progress: ramp up to 90% over ~30s then hold
         elapsed = time.time() - start_time
-        fake_pct = min(90, int(elapsed * 3))
-        _set_progress(clip.id, str(fake_pct))
+
+        if elapsed > max_wait_seconds:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            for f in [tmp_window, tmp_path]:
+                if os.path.exists(f):
+                    os.remove(f)
+            raise Exception(f"Strategy A window download timed out after {max_wait_seconds}s")
+
+        if os.path.exists(tmp_window):
+            current_size = os.path.getsize(tmp_window)
+            if current_size == last_size:
+                stalled_count += 1
+            else:
+                stalled_count = 0
+                last_size = current_size
+            if stalled_count > 30:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                os.remove(tmp_window)
+                raise Exception("Strategy A window download stalled")
+
+        _set_progress(clip.id, str(min(70, int(elapsed * 2))))
         time.sleep(0.5)
 
-    # Collect stderr for diagnostics
     stdout, stderr_data = proc.communicate(timeout=5)
 
     if proc.returncode != 0:
         err_text = stderr_data.decode("utf-8", errors="ignore").strip()[:500]
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise Exception(f"Strategy A: ffmpeg failed (rc={proc.returncode}): {err_text}")
+        for f in [tmp_window, tmp_path]:
+            if os.path.exists(f):
+                os.remove(f)
+        raise Exception(f"Strategy A window download failed: {err_text}")
 
-    # Verify output exists and is not tiny (indicates failure)
+    if not os.path.exists(tmp_window) or os.path.getsize(tmp_window) < 1024:
+        raise Exception("Strategy A window output missing or empty")
+
+    print(f"[Strategy A] Window file: {os.path.getsize(tmp_window)} bytes")
+
+    # ── Step 2: Local frame-accurate cut from synced window ──
+    cut_cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-ss", str(cut_offset),
+        "-t", str(duration),
+        "-i", tmp_window,
+        "-c", "copy",
+        "-avoid_negative_ts", "make_zero",
+        "-movflags", "+faststart",
+        tmp_path,
+    ]
+
+    print(f"[Strategy A] Step 2: local cut offset={cut_offset:.3f}s duration={duration:.1f}s")
+
+    result = subprocess.run(cut_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    if result.returncode != 0:
+        err_text = result.stderr.decode("utf-8", errors="ignore").strip()[:500]
+        for f in [tmp_window, tmp_path]:
+            if os.path.exists(f):
+                os.remove(f)
+        raise Exception(f"Strategy A local cut failed: {err_text}")
+
     if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < 1024:
-        raise Exception("Strategy A: ffmpeg output missing or empty")
+        for f in [tmp_window, tmp_path]:
+            if os.path.exists(f):
+                os.remove(f)
+        raise Exception("Strategy A local cut output missing or empty")
+
+    print(f"[Strategy A] Success: {os.path.getsize(tmp_path)} bytes")
+
+    # Clean up window file
+    try:
+        os.remove(tmp_window)
+    except OSError:
+        pass
 
     # Rename to final filename
     final_path = _build_output_path(clip, output_dir)
@@ -384,7 +485,7 @@ def _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event):
     return final_path
 
 
-def _full_download_then_cut(clip, fmt, output_dir, cancel_event):
+def _full_download_then_cut(clip, fmt, output_dir, cancel_event, audio_bitrate):
     """Strategy B (fallback): Download full video with yt-dlp, then ffmpeg-cut.
     Returns the output file path."""
     import yt_dlp
@@ -456,9 +557,12 @@ def _full_download_then_cut(clip, fmt, output_dir, cancel_event):
         "-ss", str(clip.start_time),
         "-t", str(duration),
         "-i", full_path,
-        "-c", "copy",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", f"{audio_bitrate}k",
         "-avoid_negative_ts", "make_zero",
         "-movflags", "+faststart",
+        "-shortest",
         tmp_cut_path,
     ]
     subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -503,16 +607,19 @@ def run_clip(clip_id):
             os.makedirs(output_dir, exist_ok=True)
 
             settings = Setting.get_all()
-            fmt = _resolve_format(clip.quality, clip.audio_quality, settings)
+            fmt = _resolve_format(clip.quality, settings)
+            audio_bitrate = _resolve_audio_bitrate(clip, settings)
 
             # Try Strategy A (smart ffmpeg seek) first
             _set_progress(clip_id, "5")
             try:
-                output_path = _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event)
+                output_path = _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event, audio_bitrate)
             except Exception as seek_err:
+                print(f"[Strategy A FAILED] clip_id={clip_id}: {seek_err}")
+                print(f"[Strategy A → B FALLBACK] clip_id={clip_id}: switching to full download + cut")
                 # Fallback to Strategy B (full download then cut)
                 _set_progress(clip_id, "0")
-                output_path = _full_download_then_cut(clip, fmt, output_dir, cancel_event)
+                output_path = _full_download_then_cut(clip, fmt, output_dir, cancel_event, audio_bitrate)
                 # Append Strategy A error as info so user knows what happened
                 clip.error_message = f"[{seek_err}] — fell back to full download"
 
@@ -529,7 +636,11 @@ def run_clip(clip_id):
                 clip.error_message = "Cancelled by user"
             else:
                 clip.status = "completed"
-                clip.error_message = None
+                # Keep fallback info visible so user knows Strategy A was skipped
+                if clip.error_message and "fell back to full download" in clip.error_message:
+                    pass  # preserve it
+                else:
+                    clip.error_message = None
             _set_progress(clip_id, "100")
             db.session.commit()
 
@@ -571,7 +682,7 @@ def create_clips():
 
         settings = Setting.get_all()
         quality = item.get("quality") or settings.get("default_quality", "default")
-        audio_quality = item.get("audio_quality") or settings.get("default_audio_quality", "default")
+        audio_bitrate = item.get("audio_bitrate") or settings.get("default_audio_bitrate", "128")
 
         clip = Clip(
             youtube_url=url,
@@ -579,7 +690,7 @@ def create_clips():
             end_time=end,
             quality=quality,
             video_codec=item.get("video_codec") or settings.get("default_video_codec", None),
-            audio_quality=audio_quality,
+            audio_bitrate=audio_bitrate,
             download_thumbnail=item.get("download_thumbnail", settings.get("download_thumbnail", "false")).lower() == "true",
             download_cc=item.get("download_cc", False),
             output_dir=item.get("output_dir") or settings.get("default_output_dir", "./downloads"),
@@ -677,6 +788,54 @@ def watch_clip(clip_id):
         return jsonify({"error": "File not found"}), 404
     from flask import send_file
     return send_file(clip.output_path)
+
+
+@app.route("/api/clips/<int:clip_id>/subtitles", methods=["GET"])
+def get_clip_subtitles(clip_id):
+    """Return the SRT subtitle content for a clip, or empty string if none exists."""
+    clip = Clip.query.get_or_404(clip_id)
+
+    # Determine SRT path: same base name as video, but .srt
+    if clip.output_path:
+        srt_path = os.path.splitext(clip.output_path)[0] + ".srt"
+    else:
+        # Derive path from title/start/end if output_path missing
+        output_dir = os.path.abspath(clip.output_dir or Config.DEFAULT_OUTPUT_DIR)
+        safe_title = _safe_filename(clip.title)
+        srt_path = os.path.join(output_dir, f"{safe_title}_{int(clip.start_time)}_{int(clip.end_time)}.srt")
+
+    if os.path.exists(srt_path):
+        with open(srt_path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read(), 200, {"Content-Type": "text/plain; charset=utf-8"}
+    return "", 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+@app.route("/api/clips/<int:clip_id>/subtitles", methods=["PUT"])
+def update_clip_subtitles(clip_id):
+    """Save SRT subtitle content for a clip."""
+    clip = Clip.query.get_or_404(clip_id)
+    content = request.get_data(as_text=True)
+
+    if content is None:
+        return jsonify({"error": "No content provided"}), 400
+
+    # Determine SRT path
+    if clip.output_path:
+        srt_path = os.path.splitext(clip.output_path)[0] + ".srt"
+    else:
+        output_dir = os.path.abspath(clip.output_dir or Config.DEFAULT_OUTPUT_DIR)
+        os.makedirs(output_dir, exist_ok=True)
+        safe_title = _safe_filename(clip.title)
+        srt_path = os.path.join(output_dir, f"{safe_title}_{int(clip.start_time)}_{int(clip.end_time)}.srt")
+
+    with open(srt_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    # Update has_cc flag
+    clip.has_cc = bool(content.strip())
+    db.session.commit()
+
+    return jsonify({"saved": True, "path": srt_path})
 
 
 @app.route("/api/settings", methods=["GET"])

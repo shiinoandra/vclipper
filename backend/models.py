@@ -14,6 +14,7 @@ class Clip(db.Model):
     quality = db.Column(db.String(50), default="best")
     video_codec = db.Column(db.String(50), nullable=True)
     audio_quality = db.Column(db.String(50), nullable=True)
+    audio_bitrate = db.Column(db.String(10), nullable=True)
     download_thumbnail = db.Column(db.Boolean, default=False)
     download_cc = db.Column(db.Boolean, default=False)
     output_dir = db.Column(db.String(500), default="./downloads")
@@ -36,6 +37,7 @@ class Clip(db.Model):
             "quality": self.quality,
             "video_codec": self.video_codec,
             "audio_quality": self.audio_quality,
+            "audio_bitrate": self.audio_bitrate,
             "download_thumbnail": self.download_thumbnail,
             "download_cc": self.download_cc,
             "output_dir": self.output_dir,
@@ -79,7 +81,7 @@ class Setting(db.Model):
     def init_defaults():
         defaults = {
             "default_quality": "default",
-            "default_audio_quality": "default",
+            "default_audio_bitrate": "128",
             "download_thumbnail": "false",
             "default_output_dir": "./downloads",
         }

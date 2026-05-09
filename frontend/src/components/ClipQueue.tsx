@@ -16,12 +16,12 @@ const VIDEO_QUALITIES = [
   { label: 'Worst', value: 'worst' },
 ];
 
-const AUDIO_QUALITIES = [
-  { label: 'Default', value: 'default' },
-  { label: 'Best Audio', value: 'bestaudio' },
-  { label: 'High (256k)', value: 'bestaudio[abr<=256]' },
-  { label: 'Medium (128k)', value: 'bestaudio[abr<=128]' },
-  { label: 'Worst Audio', value: 'worstaudio' },
+const AUDIO_BITRATES = [
+  { label: 'Default (128k)', value: 'default' },
+  { label: '96 kbps', value: '96' },
+  { label: '128 kbps', value: '128' },
+  { label: '192 kbps', value: '192' },
+  { label: '256 kbps', value: '256' },
 ];
 
 export default function ClipQueue({ segments, onUpdate, onRemove }: ClipQueueProps) {
@@ -80,11 +80,11 @@ export default function ClipQueue({ segments, onUpdate, onRemove }: ClipQueuePro
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <label style={{ fontSize: 12, color: '#6b7280' }}>Audio</label>
                   <select
-                    value={seg.audioQuality}
-                    onChange={(e) => onUpdate(seg.id, { audioQuality: e.target.value })}
+                    value={seg.audioBitrate}
+                    onChange={(e) => onUpdate(seg.id, { audioBitrate: e.target.value })}
                     style={{ fontSize: 12, padding: '4px 6px', borderRadius: 4, border: '1px solid #d1d5db' }}
                   >
-                    {AUDIO_QUALITIES.map((q) => (
+                    {AUDIO_BITRATES.map((q) => (
                       <option key={q.value} value={q.value}>{q.label}</option>
                     ))}
                   </select>

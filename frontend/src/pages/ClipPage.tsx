@@ -84,7 +84,7 @@ export default function ClipPage() {
       end,
       color: getColor(segments.length),
       quality: 'default',
-      audioQuality: 'default',
+      audioBitrate: 'default',
       downloadCC: false,
     };
     setSegments((prev) => [...prev, seg]);
@@ -108,7 +108,7 @@ export default function ClipPage() {
         start_time: seg.start,
         end_time: seg.end,
         quality: seg.quality === 'default' ? undefined : seg.quality,
-        audio_quality: seg.audioQuality === 'default' ? undefined : seg.audioQuality,
+        audio_bitrate: seg.audioBitrate === 'default' ? undefined : seg.audioBitrate,
         download_cc: seg.downloadCC,
       }));
       await createClips(payload);
