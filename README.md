@@ -11,7 +11,7 @@ A YouTube video clipping application with a React frontend, Flask REST API, and 
 - Process clips asynchronously via background threads
 - Live progress updates via Server-Sent Events
 - Cancel, retry, and delete jobs
-- History of completed/failed/cancelled clips
+- Collections gallery with watch, download, and retry for completed clips
 - Configurable default yt-dlp quality presets
 
 ## Prerequisites
@@ -62,7 +62,7 @@ vclipper/
 │   ├── src/
 │   │   ├── api.ts          # API client
 │   │   ├── components/     # YouTubePlayer, Timeline, ClipQueue, Layout
-│   │   └── pages/          # Home, Clip, Jobs, History, Settings
+│   │   └── pages/          # Home, Clip, Jobs, Collections, Settings
 │   ├── vite.config.ts      # Vite config with /api proxy
 │   └── package.json
 ├── docker-compose.yml      # PostgreSQL
@@ -80,6 +80,12 @@ vclipper/
 | POST | `/api/clips/<id>/cancel` | Cancel a running clip |
 | POST | `/api/clips/<id>/retry` | Retry a failed/cancelled clip |
 | GET | `/api/clips/<id>/progress` | SSE progress stream |
+| GET | `/api/clips/<id>/download` | Download clip file |
+| GET | `/api/clips/<id>/watch` | Stream clip file for viewing |
+| GET | `/api/channels` | List tracked channels |
+| POST | `/api/channels` | Add tracked channel |
+| DELETE | `/api/channels/<id>` | Remove tracked channel |
+| GET | `/api/live` | List live streams grouped by date |
 | GET | `/api/settings` | Get settings |
 | POST | `/api/settings` | Update settings |
 | GET | `/api/health` | Health check |

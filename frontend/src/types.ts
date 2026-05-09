@@ -13,6 +13,9 @@ export interface Clip {
   status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
   output_path?: string;
   error_message?: string;
+  video_resolution?: string;
+  audio_codec?: string;
+  has_cc?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -41,6 +44,7 @@ export interface TrackedChannel {
   channel_id: string;
   channel_name?: string;
   avatar_url?: string;
+  tags?: string;
   created_at?: string;
 }
 

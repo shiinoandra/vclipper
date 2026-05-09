@@ -38,6 +38,14 @@ export async function retryClip(id: number): Promise<Clip> {
   return fetchJson<Clip>(`${API_BASE}/clips/${id}/retry`, { method: 'POST' });
 }
 
+export function getDownloadUrl(id: number): string {
+  return `${API_BASE}/clips/${id}/download`;
+}
+
+export function getWatchUrl(id: number): string {
+  return `${API_BASE}/clips/${id}/watch`;
+}
+
 export async function getSettings(): Promise<Settings> {
   return fetchJson<Settings>(`${API_BASE}/settings`);
 }
@@ -80,8 +88,16 @@ export async function deleteChannel(id: number): Promise<void> {
   await fetch(`${API_BASE}/channels/${id}`, { method: 'DELETE' });
 }
 
+export async function updateChannelTags(id: number, tags: string[]): Promise<TrackedChannel> {
+  return fetchJson<TrackedChannel>(`${API_BASE}/channels/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ tags }),
+  });
+}
+
 // ─── Live Streams ───
 
-export async function listLiveStreams(): Promise<LiveStreamGroup[]> {
-  return fetchJson<LiveStreamGroup[]>(`${API_BASE}/live`);
+export async function listLiveStreams(tag?: string): Promise<LiveStreamGroup[]> {
+  const qs = tag ? `?tag=${encodeURIComponent(tag)}` : '';
+  return fetchJson<LiveStreamGroup[]>(`${API_BASE}/live${qs}`);
 }

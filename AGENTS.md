@@ -31,7 +31,7 @@
 - **Cancel/Retry**: A `threading.Event` flag signals the download loop to abort. Strategy A cancels the ffmpeg subprocess directly. Retry resets the clip status and spawns a fresh thread.
 - **Per-clip quality**: Each segment in the queue can override video/audio quality. "default" falls back to the global setting (720p video / 128k AAC).
 - **Closed captions**: If enabled per-clip, yt-dlp downloads the full subtitle file, then the backend parses SRT/VTT, strips WebVTT cue tags (e.g. `<02:44:19.359><c> be.</c>`), filters entries overlapping the segment, shifts timestamps to start at 00:00:00, and saves a `.srt` next to the video.
-- **Live stream tracking**: A background thread polls tracked channels every 5 minutes via yt-dlp. Detects live, upcoming, and ended streams. Home page groups them by date. Add/remove channels in Settings → Tracked Channels.
+- **Live stream tracking**: A background thread polls tracked channels every 5 minutes via yt-dlp. Detects live, upcoming, and ended streams. Home page groups them by date and supports tag-based filtering. Add/remove channels and edit tags in Settings → Tracked Channels.
 
 ## Important File Locations
 
@@ -68,7 +68,7 @@ cd frontend && npm run dev
 - `/` — Home: live streams and recent uploads from tracked channels, grouped by date
 - `/clip` — YouTube player + timeline + queue + process. Accepts `?url=` query param to auto-load a video
 - `/jobs` — Active jobs with live SSE progress bars
-- `/history` — Completed/failed/cancelled clips
+- `/collections` — Gallery of completed clips with watch, download, and retry
 - `/settings` — Default yt-dlp params + Tracked Channels management
 
 ## Notes

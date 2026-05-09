@@ -1,11 +1,11 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Scissors, Activity, History, Settings } from 'lucide-react';
+import { Home, Scissors, Activity, FolderOpen, Settings } from 'lucide-react';
 
 const tabs = [
   { path: '/', label: 'Home', icon: Home },
   { path: '/clip', label: 'Clip', icon: Scissors },
   { path: '/jobs', label: 'Jobs', icon: Activity },
-  { path: '/history', label: 'History', icon: History },
+  { path: '/collections', label: 'Collections', icon: FolderOpen },
   { path: '/settings', label: 'Settings', icon: Settings },
 ];
 

@@ -214,17 +214,63 @@ def _download_and_slice_cc(clip, output_dir):
     return out_sub
 
 
+def _safe_filename(title: str) -> str:
+    """Sanitize a string for use as a filesystem filename."""
+    import re
+    safe = re.sub(r'[^\w\s-]', '', title or "Untitled")
+    safe = re.sub(r'[-\s]+', '_', safe).strip('_')
+    return safe[:80] or "Untitled"
+
+
+def _build_output_path(clip, output_dir):
+    """Build output filename as <title>_<start>_<end>.mp4"""
+    safe_title = _safe_filename(clip.title)
+    start_sec = int(clip.start_time)
+    end_sec = int(clip.end_time)
+    filename = f"{safe_title}_{start_sec}_{end_sec}.mp4"
+    return os.path.join(output_dir, filename)
+
+
+def _extract_media_info(info, clip):
+    """Extract resolution and audio codec from yt-dlp info dict."""
+    requested = info.get("requested_formats", [])
+    if len(requested) >= 1:
+        # DASH or single format
+        video_fmt = requested[0] if requested[0].get("vcodec") != "none" else (requested[1] if len(requested) > 1 else requested[0])
+        audio_fmt = None
+        for f in requested:
+            if f.get("acodec") != "none":
+                audio_fmt = f
+                break
+        width = video_fmt.get("width") or info.get("width")
+        height = video_fmt.get("height") or info.get("height")
+        resolution = f"{width}x{height}" if width and height else None
+        audio_codec = audio_fmt.get("acodec") if audio_fmt else None
+    else:
+        resolution = f"{info.get('width')}x{info.get('height')}" if info.get("width") and info.get("height") else None
+        audio_codec = info.get("acodec")
+    return resolution, audio_codec
+
+
+def _detect_cc(output_path):
+    """Check if a .srt subtitle file exists next to the video."""
+    if not output_path:
+        return False
+    srt_path = os.path.splitext(output_path)[0] + ".srt"
+    return os.path.exists(srt_path) and os.path.getsize(srt_path) > 0
+
+
 def _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event):
     """Strategy A: Extract DASH URLs and invoke ffmpeg with input-seeking.
     Returns the output file path on success, raises Exception on failure."""
     import yt_dlp
 
-    final_path = os.path.join(output_dir, f"clip_{clip.id}.mp4")
     duration = clip.end_time - clip.start_time
+    tmp_path = os.path.join(output_dir, f"_clip_{clip.id}.mp4")
 
     # Clean up any stale output
-    if os.path.exists(final_path):
-        os.remove(final_path)
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
 
     # 1. Extract format URLs without downloading
     info_opts = {
@@ -257,10 +303,13 @@ def _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event):
         if not video_url:
             raise Exception("Strategy A: could not extract video URL")
 
+        # Extract media metadata
+        clip.title = info.get("title", clip.title or "Untitled")
+        resolution, audio_codec = _extract_media_info(info, clip)
+        clip.video_resolution = resolution
+        clip.audio_codec = audio_codec
+
     # 2. Build ffmpeg command with input-seeking
-    # Note: -request_size is NOT a valid ffmpeg CLI option; it only exists
-    # inside yt-dlp's FFmpegFD wrapper. We rely on ffmpeg's native HTTP
-    # seeking which works well for MP4/M4A containers.
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
 
     # Video input (input-seeking: -ss before -i)
@@ -285,7 +334,7 @@ def _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event):
     cmd += [
         "-avoid_negative_ts", "make_zero",
         "-movflags", "+faststart",
-        final_path,
+        tmp_path,
     ]
 
     # 3. Run ffmpeg with polling for cancellation
@@ -304,8 +353,8 @@ def _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event):
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
-            if os.path.exists(final_path):
-                os.remove(final_path)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
             raise Exception("Cancelled by user")
 
         # Fake progress: ramp up to 90% over ~30s then hold
@@ -319,14 +368,19 @@ def _ffmpeg_seek_download(clip, fmt, output_dir, cancel_event):
 
     if proc.returncode != 0:
         err_text = stderr_data.decode("utf-8", errors="ignore").strip()[:500]
-        if os.path.exists(final_path):
-            os.remove(final_path)
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
         raise Exception(f"Strategy A: ffmpeg failed (rc={proc.returncode}): {err_text}")
 
     # Verify output exists and is not tiny (indicates failure)
-    if not os.path.exists(final_path) or os.path.getsize(final_path) < 1024:
+    if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < 1024:
         raise Exception("Strategy A: ffmpeg output missing or empty")
 
+    # Rename to final filename
+    final_path = _build_output_path(clip, output_dir)
+    if os.path.exists(final_path):
+        os.remove(final_path)
+    os.rename(tmp_path, final_path)
     return final_path
 
 
@@ -336,7 +390,7 @@ def _full_download_then_cut(clip, fmt, output_dir, cancel_event):
     import yt_dlp
 
     tmp_outtmpl = os.path.join(output_dir, f"_full_{clip.id}_%(title).100B.%(ext)s")
-    final_path = os.path.join(output_dir, f"clip_{clip.id}.mp4")
+    tmp_cut_path = os.path.join(output_dir, f"_clip_{clip.id}.mp4")
     duration = clip.end_time - clip.start_time
 
     def progress_hook(d):
@@ -374,7 +428,7 @@ def _full_download_then_cut(clip, fmt, output_dir, cancel_event):
     full_path = None
     with yt_dlp.YoutubeDL(full_ydl_opts) as ydl:
         info = ydl.extract_info(clip.youtube_url, download=True)
-        clip.title = info.get("title", "Unknown")
+        clip.title = info.get("title", clip.title or "Untitled")
         expected = ydl.prepare_filename(info)
         if os.path.exists(expected):
             full_path = expected
@@ -385,6 +439,11 @@ def _full_download_then_cut(clip, fmt, output_dir, cancel_event):
                 if os.path.exists(candidate):
                     full_path = candidate
                     break
+
+        # Extract media metadata
+        resolution, audio_codec = _extract_media_info(info, clip)
+        clip.video_resolution = resolution
+        clip.audio_codec = audio_codec
 
     if cancel_event.is_set():
         raise Exception("Cancelled by user")
@@ -400,11 +459,11 @@ def _full_download_then_cut(clip, fmt, output_dir, cancel_event):
         "-c", "copy",
         "-avoid_negative_ts", "make_zero",
         "-movflags", "+faststart",
-        final_path,
+        tmp_cut_path,
     ]
     subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    if not os.path.exists(final_path):
+    if not os.path.exists(tmp_cut_path):
         raise Exception("FFmpeg cut failed: output file not created")
 
     # Clean up full download
@@ -417,6 +476,11 @@ def _full_download_then_cut(clip, fmt, output_dir, cancel_event):
     except OSError:
         pass
 
+    # Rename to final filename
+    final_path = _build_output_path(clip, output_dir)
+    if os.path.exists(final_path):
+        os.remove(final_path)
+    os.rename(tmp_cut_path, final_path)
     return final_path
 
 
@@ -595,6 +659,26 @@ def clip_progress(clip_id):
                 time.sleep(1)
     return Response(event_stream(), mimetype="text/event-stream")
 
+@app.route("/api/clips/<int:clip_id>/download")
+def download_clip(clip_id):
+    """Serve the clipped video file as a downloadable attachment."""
+    clip = Clip.query.get_or_404(clip_id)
+    if not clip.output_path or not os.path.exists(clip.output_path):
+        return jsonify({"error": "File not found"}), 404
+    from flask import send_file
+    return send_file(clip.output_path, as_attachment=True)
+
+
+@app.route("/api/clips/<int:clip_id>/watch")
+def watch_clip(clip_id):
+    """Serve the clipped video file for inline viewing."""
+    clip = Clip.query.get_or_404(clip_id)
+    if not clip.output_path or not os.path.exists(clip.output_path):
+        return jsonify({"error": "File not found"}), 404
+    from flask import send_file
+    return send_file(clip.output_path)
+
+
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
     return jsonify(Setting.get_all())
@@ -732,6 +816,21 @@ def add_channel():
     return jsonify(channel.to_dict()), 201
 
 
+@app.route("/api/channels/<int:channel_db_id>", methods=["PUT"])
+def update_channel(channel_db_id):
+    import json
+    channel = TrackedChannel.query.get_or_404(channel_db_id)
+    data = request.get_json() or {}
+    tags = data.get("tags")
+    if tags is not None:
+        if isinstance(tags, list):
+            channel.tags = json.dumps(tags)
+        elif isinstance(tags, str):
+            channel.tags = tags
+    db.session.commit()
+    return jsonify(channel.to_dict())
+
+
 @app.route("/api/channels/<int:channel_db_id>", methods=["DELETE"])
 def delete_channel(channel_db_id):
     channel = TrackedChannel.query.get_or_404(channel_db_id)
@@ -746,17 +845,35 @@ def delete_channel(channel_db_id):
 
 @app.route("/api/live", methods=["GET"])
 def list_live_streams():
-    """Return live streams grouped by date."""
+    """Return live streams grouped by date. Optional ?tag= filter."""
     from datetime import datetime, timedelta
+    import json
+
+    tag = request.args.get("tag", "").strip()
 
     # Show streams from last 3 days + currently live + upcoming
     cutoff = datetime.utcnow() - timedelta(days=3)
 
-    streams = LiveStream.query.filter(
+    q = LiveStream.query.filter(
         (LiveStream.status == "live") |
         (LiveStream.status == "upcoming") |
         (LiveStream.actual_start >= cutoff)
-    ).order_by(LiveStream.actual_start.desc().nullsfirst(), LiveStream.scheduled_start.desc().nullsfirst()).all()
+    )
+
+    # Filter by tag if provided
+    if tag:
+        channels = TrackedChannel.query.all()
+        matching_channel_ids = []
+        for ch in channels:
+            try:
+                ch_tags = json.loads(ch.tags or "[]")
+                if isinstance(ch_tags, list) and tag in ch_tags:
+                    matching_channel_ids.append(ch.id)
+            except (json.JSONDecodeError, TypeError):
+                continue
+        q = q.filter(LiveStream.channel_id.in_(matching_channel_ids))
+
+    streams = q.order_by(LiveStream.actual_start.desc().nullsfirst(), LiveStream.scheduled_start.desc().nullsfirst()).all()
 
     # Group by date (using actual_start or scheduled_start)
     groups = {}

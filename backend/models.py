@@ -20,6 +20,9 @@ class Clip(db.Model):
     status = db.Column(db.String(50), default="pending")
     output_path = db.Column(db.String(500), nullable=True)
     error_message = db.Column(db.Text, nullable=True)
+    video_resolution = db.Column(db.String(50))
+    audio_codec = db.Column(db.String(50))
+    has_cc = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -39,6 +42,9 @@ class Clip(db.Model):
             "status": self.status,
             "output_path": self.output_path,
             "error_message": self.error_message,
+            "video_resolution": self.video_resolution,
+            "audio_codec": self.audio_codec,
+            "has_cc": self.has_cc,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -89,6 +95,7 @@ class TrackedChannel(db.Model):
     channel_id = db.Column(db.String(100), unique=True, nullable=False)
     channel_name = db.Column(db.String(200))
     avatar_url = db.Column(db.String(500))
+    tags = db.Column(db.Text)  # JSON array of tags
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -97,6 +104,7 @@ class TrackedChannel(db.Model):
             "channel_id": self.channel_id,
             "channel_name": self.channel_name,
             "avatar_url": self.avatar_url,
+            "tags": self.tags,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

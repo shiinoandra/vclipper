@@ -3,7 +3,7 @@ import Layout from './components/Layout';
 import HomePage from './pages/HomePage';
 import ClipPage from './pages/ClipPage';
 import JobsPage from './pages/JobsPage';
-import HistoryPage from './pages/HistoryPage';
+import CollectionsPage from './pages/CollectionsPage';
 import SettingsPage from './pages/SettingsPage';
 
 function App() {
@@ -13,7 +13,7 @@ function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/clip" element={<ClipPage />} />
         <Route path="/jobs" element={<JobsPage />} />
-        <Route path="/history" element={<HistoryPage />} />
+        <Route path="/collections" element={<CollectionsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Routes>
     </Layout>

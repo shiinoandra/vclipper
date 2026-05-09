@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { listLiveStreams } from '../api';
-import type { LiveStreamGroup, LiveStream } from '../types';
+import { listLiveStreams, listChannels } from '../api';
+import type { LiveStreamGroup, LiveStream, TrackedChannel } from '../types';
 
 function formatDateHeader(dateStr: string): string {
   const date = new Date(dateStr + 'T00:00:00');
@@ -28,7 +28,7 @@ function formatStreamTime(iso: string | undefined): string {
   return `${hh}:${mm}`;
 }
 
-const STREAMS_PER_PAGE = 12; // ~3 rows of 4 cards each
+const STREAMS_PER_PAGE = 12;
 
 function StreamCard({ stream }: { stream: LiveStream }) {
   const navigate = useNavigate();
@@ -214,14 +214,39 @@ function PaginatedStreamGrid({ streams }: { streams: LiveStream[] }) {
   );
 }
 
+function extractAllTags(channels: TrackedChannel[]): string[] {
+  const set = new Set<string>();
+  for (const ch of channels) {
+    if (!ch.tags) continue;
+    try {
+      const parsed = JSON.parse(ch.tags);
+      if (Array.isArray(parsed)) {
+        for (const t of parsed) {
+          if (typeof t === 'string') set.add(t);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return Array.from(set).sort();
+}
+
 export default function HomePage() {
   const [groups, setGroups] = useState<LiveStreamGroup[]>([]);
   const [loading, setLoading] = useState(true);
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [selectedTag, setSelectedTag] = useState<string>('');
 
-  const load = async () => {
+  const load = async (tag?: string) => {
     try {
-      const data = await listLiveStreams();
+      setLoading(true);
+      const [data, channels] = await Promise.all([
+        listLiveStreams(tag || undefined),
+        listChannels(),
+      ]);
       setGroups(data);
+      setAvailableTags(extractAllTags(channels));
     } catch (e) {
       console.error('Failed to load live streams:', e);
     } finally {
@@ -231,18 +256,67 @@ export default function HomePage() {
 
   useEffect(() => {
     load();
-    const iv = setInterval(load, 300000); // Refresh every 5 minutes
+    const iv = setInterval(() => load(selectedTag), 300000);
     return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (loading) return <p>Loading...</p>;
+  useEffect(() => {
+    load(selectedTag);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTag]);
+
+  if (loading && groups.length === 0) return <p>Loading...</p>;
 
   return (
     <div>
       <h2 style={{ marginTop: 0 }}>Home</h2>
 
+      {/* Tag filter bar */}
+      {availableTags.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16, alignItems: 'center' }}>
+          <span style={{ fontSize: 13, color: '#6b7280', fontWeight: 500 }}>Filter:</span>
+          <button
+            onClick={() => setSelectedTag('')}
+            style={{
+              fontSize: 12,
+              padding: '4px 12px',
+              borderRadius: 12,
+              border: '1px solid #d1d5db',
+              background: selectedTag === '' ? '#111' : '#fff',
+              color: selectedTag === '' ? '#fff' : '#374151',
+              cursor: 'pointer',
+            }}
+          >
+            All
+          </button>
+          {availableTags.map((tag) => (
+            <button
+              key={tag}
+              onClick={() => setSelectedTag(tag)}
+              style={{
+                fontSize: 12,
+                padding: '4px 12px',
+                borderRadius: 12,
+                border: '1px solid #d1d5db',
+                background: selectedTag === tag ? '#111' : '#fff',
+                color: selectedTag === tag ? '#fff' : '#374151',
+                cursor: 'pointer',
+                textTransform: 'capitalize',
+              }}
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
+      )}
+
       {groups.length === 0 ? (
-        <p style={{ color: '#6b7280' }}>No live streams or recent uploads from tracked channels.</p>
+        <p style={{ color: '#6b7280' }}>
+          {selectedTag
+            ? `No live streams or recent uploads for tag "${selectedTag}".`
+            : 'No live streams or recent uploads from tracked channels.'}
+        </p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {groups.map((group) => (
