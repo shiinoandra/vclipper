@@ -84,6 +84,10 @@ class Setting(db.Model):
             "default_audio_bitrate": "128",
             "download_thumbnail": "false",
             "default_output_dir": "./downloads",
+            "transcription_provider_url": "",
+            "transcription_api_key": "",
+            "transcription_model": "",
+            "transcription_language": "",
         }
         for k, v in defaults.items():
             if Setting.get(k) is None:

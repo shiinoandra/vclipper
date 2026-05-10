@@ -838,6 +838,188 @@ def update_clip_subtitles(clip_id):
     return jsonify({"saved": True, "path": srt_path})
 
 
+# ─── AI Transcription ───
+
+def _split_text_to_srt(text: str, start_sec: float, end_sec: float) -> str:
+    """Split plain transcript text into SRT segments with proportional timestamps.
+
+    Splits on sentence boundaries (。！？.!?) and distributes time by character
+    count so longer sentences get proportionally more screen time.
+    """
+    import re
+
+    text = text.strip()
+    if not text:
+        return ""
+
+    # Split on sentence-ending punctuation, keeping the punctuation with the sentence
+    sentences = re.split(r'(?<=[。！？\.\?!])\s*', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    if not sentences:
+        sentences = [text]
+
+    total_chars = sum(len(s) for s in sentences)
+    total_duration = max(end_sec - start_sec, 1.0)
+
+    entries = []
+    current_time = start_sec
+    for i, sentence in enumerate(sentences, start=1):
+        # Proportional duration based on character count
+        ratio = len(sentence) / total_chars if total_chars > 0 else 1.0 / len(sentences)
+        seg_duration = ratio * total_duration
+
+        # Clamp segment duration for readability
+        seg_duration = max(seg_duration, 1.0)
+        seg_duration = min(seg_duration, 8.0)
+
+        seg_start = current_time
+        seg_end = min(seg_start + seg_duration, end_sec)
+
+        # Ensure last segment reaches the end
+        if i == len(sentences):
+            seg_end = end_sec
+
+        entries.append({
+            "index": i,
+            "start": seg_start,
+            "end": seg_end,
+            "text": sentence,
+        })
+        current_time = seg_end
+
+    lines = []
+    for e in entries:
+        lines.append(str(e["index"]))
+        lines.append(f"{_format_srt_time(e['start'])} --> {_format_srt_time(e['end'])}")
+        lines.append(e["text"])
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@app.route("/api/clips/<int:clip_id>/transcribe", methods=["POST"])
+def transcribe_clip(clip_id):
+    """Extract audio from a completed clip, send to transcription provider, save SRT."""
+    import requests
+    import tempfile
+
+    clip = Clip.query.get_or_404(clip_id)
+
+    if clip.status != "completed" or not clip.output_path or not os.path.exists(clip.output_path):
+        return jsonify({"error": "Clip not available for transcription"}), 400
+
+    # Read transcription settings
+    provider_url = (Setting.get("transcription_provider_url") or "").strip()
+    api_key = (Setting.get("transcription_api_key") or "").strip()
+    model = (Setting.get("transcription_model") or "").strip()
+    default_language = (Setting.get("transcription_language") or "").strip()
+
+    # Allow per-request language override
+    req_data = request.get_json(silent=True) or {}
+    language = (req_data.get("language") or default_language).strip()
+
+    if not provider_url:
+        return jsonify({"error": "Transcription provider URL not configured. Set it in Settings."}), 400
+
+    # Determine SRT path
+    srt_path = os.path.splitext(clip.output_path)[0] + ".srt"
+
+    # Extract audio to temporary file (16kHz mono WAV — compatible with most ASR models)
+    tmp_audio = None
+    try:
+        fd, tmp_audio = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+
+        ffmpeg_cmd = [
+            "ffmpeg", "-y", "-i", clip.output_path,
+            "-vn", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+            tmp_audio,
+        ]
+        proc = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            return jsonify({"error": f"ffmpeg audio extraction failed: {proc.stderr}"}), 500
+
+        # Call transcription API
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        with open(tmp_audio, "rb") as af:
+            files = {"file": ("audio.wav", af, "audio/wav")}
+            data = {"response_format": "srt"}
+            if model:
+                data["model"] = model
+            if language:
+                data["language"] = language
+
+            try:
+                resp = requests.post(
+                    f"{provider_url.rstrip('/')}/v1/audio/transcriptions",
+                    headers=headers,
+                    files=files,
+                    data=data,
+                    timeout=300,
+                )
+            except requests.exceptions.ConnectionError as e:
+                return jsonify({"error": f"Cannot connect to transcription provider: {e}"}), 502
+            except requests.exceptions.Timeout:
+                return jsonify({"error": "Transcription provider timed out"}), 504
+
+        if resp.status_code != 200:
+            return jsonify({"error": f"Transcription API error {resp.status_code}: {resp.text}"}), 502
+
+        # Handle SRT response (plain text or JSON fallback)
+        content_type = resp.headers.get("Content-Type", "")
+        if content_type.startswith("text/plain") or content_type.startswith("application/x-subrip"):
+            srt_content = resp.text.strip()
+        else:
+            # Fallback: try JSON with text field
+            try:
+                result = resp.json()
+                if isinstance(result, str):
+                    srt_content = result.strip()
+                else:
+                    srt_content = result.get("text", "").strip()
+                    if srt_content:
+                        srt_content = _split_text_to_srt(srt_content, 0.0, clip.end_time - clip.start_time)
+            except Exception:
+                srt_content = resp.text.strip()
+
+        if not srt_content:
+            return jsonify({"error": "Transcription returned empty subtitles (no speech detected)."}), 500
+
+        # Save SRT
+        with open(srt_path, "w", encoding="utf-8") as f:
+            f.write(srt_content)
+
+        # Update has_cc flag
+        clip.has_cc = True
+        db.session.commit()
+
+        # Extract plain transcript from SRT for the response
+        transcript_text = " ".join(
+            line.strip()
+            for line in srt_content.splitlines()
+            if line.strip() and not line.strip().isdigit()
+            and "-->" not in line
+        )
+
+        return jsonify({
+            "success": True,
+            "transcript": transcript_text,
+            "srt": srt_content,
+            "path": srt_path,
+        })
+
+    finally:
+        if tmp_audio and os.path.exists(tmp_audio):
+            try:
+                os.remove(tmp_audio)
+            except OSError:
+                pass
+
+
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
     return jsonify(Setting.get_all())

@@ -36,6 +36,10 @@ export interface Settings {
   default_audio_bitrate?: string;
   download_thumbnail?: string;
   default_output_dir?: string;
+  transcription_provider_url?: string;
+  transcription_api_key?: string;
+  transcription_model?: string;
+  transcription_language?: string;
   [key: string]: string | undefined;
 }
 

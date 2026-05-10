@@ -1,8 +1,27 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { getWatchUrl } from '../api';
+import { getWatchUrl, transcribeClip } from '../api';
 import { parseSrt, serializeSrt, findActiveCue, type SrtCue } from '../utils/srt';
 import { formatTime, formatDuration } from '../utils/time';
 import { X, Pencil, Trash2, Sparkles, Scissors } from 'lucide-react';
+
+const TRANSCRIBE_LANGUAGES = [
+  { label: 'Auto-detect', value: '' },
+  { label: 'Japanese', value: 'ja' },
+  { label: 'English', value: 'en' },
+  { label: 'Chinese', value: 'zh' },
+  { label: 'Korean', value: 'ko' },
+  { label: 'Spanish', value: 'es' },
+  { label: 'French', value: 'fr' },
+  { label: 'German', value: 'de' },
+  { label: 'Italian', value: 'it' },
+  { label: 'Russian', value: 'ru' },
+  { label: 'Portuguese', value: 'pt' },
+  { label: 'Arabic', value: 'ar' },
+  { label: 'Hindi', value: 'hi' },
+  { label: 'Thai', value: 'th' },
+  { label: 'Vietnamese', value: 'vi' },
+  { label: 'Indonesian', value: 'id' },
+];
 
 interface SubtitleEditorModalProps {
   clipId: number;
@@ -201,6 +220,10 @@ export default function SubtitleEditorModal({
   const [addEnd, setAddEnd] = useState(3);
   const [addText, setAddText] = useState('');
 
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [generateLang, setGenerateLang] = useState('');
+
   const [videoDuration, setVideoDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -298,6 +321,20 @@ export default function SubtitleEditorModal({
     onClose();
   };
 
+  const handleGenerate = async () => {
+    setGenerating(true);
+    setGenerateError(null);
+    try {
+      const result = await transcribeClip(clipId, generateLang || undefined);
+      const newCues = parseSrt(result.srt);
+      setCues(newCues);
+    } catch (e: any) {
+      setGenerateError(e.message || 'Transcription failed');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const activeCue = cues.find((c) => c.id === activeCueId) || null;
 
   return (
@@ -328,24 +365,6 @@ export default function SubtitleEditorModal({
           <span style={{ fontSize: 12, color: '#9ca3af' }}>{title || 'Untitled'}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button
-            onClick={() => alert('Auto-transcription coming soon!')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 12px',
-              borderRadius: 4,
-              border: '1px solid #4b5563',
-              background: 'transparent',
-              color: '#d1d5db',
-              fontSize: 12,
-              cursor: 'pointer',
-            }}
-          >
-            <Sparkles size={14} />
-            Auto-transcribe
-          </button>
           <button
             onClick={handleSave}
             style={{
@@ -385,6 +404,58 @@ export default function SubtitleEditorModal({
             flexDirection: 'column',
           }}
         >
+          {/* Generate transcript panel */}
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid #e5e7eb', background: '#fff' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <Sparkles size={14} color="#6b7280" />
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>Generate Transcript</span>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <select
+                value={generateLang}
+                onChange={(e) => setGenerateLang(e.target.value)}
+                disabled={generating}
+                style={{
+                  flex: 1,
+                  padding: '6px 8px',
+                  borderRadius: 4,
+                  border: '1px solid #d1d5db',
+                  fontSize: 13,
+                  background: '#fff',
+                  cursor: generating ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {TRANSCRIBE_LANGUAGES.map((lang) => (
+                  <option key={lang.value} value={lang.value}>
+                    {lang.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleGenerate}
+                disabled={generating}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 4,
+                  border: 'none',
+                  background: generating ? '#9ca3af' : '#3b82f6',
+                  color: '#fff',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: generating ? 'not-allowed' : 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {generating ? 'Generating...' : 'Generate'}
+              </button>
+            </div>
+            {generateError && (
+              <div style={{ marginTop: 8, fontSize: 12, color: '#ef4444', lineHeight: 1.4 }}>
+                {generateError}
+              </div>
+            )}
+          </div>
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {cues.map((cue) => {
               const isActive = cue.id === activeCueId;
@@ -464,7 +535,8 @@ export default function SubtitleEditorModal({
             {cues.length === 0 && (
               <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>
                 No subtitles yet.<br />
-                Use the form below the video to add one.
+                Select a language above and click Generate,<br />
+                or use the form below the video to add one manually.
               </div>
             )}
           </div>

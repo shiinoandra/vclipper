@@ -124,3 +124,19 @@ export async function updateSubtitles(clipId: number, content: string): Promise<
     throw new Error(err || res.statusText);
   }
 }
+
+export async function transcribeClip(
+  clipId: number,
+  language?: string
+): Promise<{ success: boolean; transcript: string; srt: string; path: string }> {
+  const res = await fetch(`${API_BASE}/clips/${clipId}/transcribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ language: language || undefined }),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || res.statusText);
+  }
+  return res.json();
+}

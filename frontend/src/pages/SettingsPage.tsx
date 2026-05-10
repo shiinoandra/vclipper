@@ -136,6 +136,56 @@ export default function SettingsPage() {
             />
           </div>
 
+          <div style={{ marginBottom: 16, borderTop: '1px solid #e5e7eb', paddingTop: 16 }}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Transcription Provider URL</label>
+            <input
+              type="text"
+              value={settings.transcription_provider_url || ''}
+              onChange={(e) => handleChange('transcription_provider_url', e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 4, border: '1px solid #d1d5db', fontSize: 14 }}
+              placeholder="http://localhost:8000"
+            />
+            <p style={{ fontSize: 12, color: '#6b7280', marginTop: 4, marginBottom: 0 }}>
+              OpenAI-compatible API endpoint (e.g. vLLM, speaches). Leave empty to disable transcription.
+            </p>
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Transcription API Key</label>
+            <input
+              type="password"
+              value={settings.transcription_api_key || ''}
+              onChange={(e) => handleChange('transcription_api_key', e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 4, border: '1px solid #d1d5db', fontSize: 14 }}
+              placeholder="Bearer token (optional)"
+            />
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Transcription Model</label>
+            <input
+              type="text"
+              value={settings.transcription_model || ''}
+              onChange={(e) => handleChange('transcription_model', e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 4, border: '1px solid #d1d5db', fontSize: 14 }}
+              placeholder="Model ID (optional, e.g. Qwen/Qwen3-ASR-1.7B)"
+            />
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Transcription Language</label>
+            <input
+              type="text"
+              value={settings.transcription_language || ''}
+              onChange={(e) => handleChange('transcription_language', e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 4, border: '1px solid #d1d5db', fontSize: 14 }}
+              placeholder="e.g. ja, zh, en (leave empty for auto-detect)"
+            />
+            <p style={{ fontSize: 12, color: '#6b7280', marginTop: 4, marginBottom: 0 }}>
+              ISO language code passed to the transcription API. Empty = auto-detect.
+            </p>
+          </div>
+
           <button
             onClick={handleSave}
             disabled={saving}

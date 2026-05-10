@@ -252,7 +252,7 @@ export default function CollectionsPage() {
                         }}
                       >
                         <PenLine size={13} />
-                        Edit Subtitle
+                        {clip.has_cc ? 'Edit Subtitle' : 'Generate Subtitle'}
                       </button>
                     )}
                     {canDownload && (
