@@ -23,6 +23,8 @@ export default function ClipPage() {
   const [currentTime, setCurrentTime] = useState(0);
   const [segments, setSegments] = useState<ClipSegment[]>([]);
   const [pendingStart, setPendingStart] = useState<number | null>(null);
+  const [inputStart, setInputStart] = useState('');
+  const [inputEnd, setInputEnd] = useState('');
   const [processing, setProcessing] = useState(false);
   const playerApiRef = useRef<{ seekTo: (t: number) => void; getCurrentTime: () => number; getDuration: () => number } | null>(null);
 
@@ -34,6 +36,8 @@ export default function ClipPage() {
       setCurrentTime(0);
       setSegments([]);
       setPendingStart(null);
+      setInputStart('');
+      setInputEnd('');
     }
   }, [url]);
 
@@ -69,15 +73,47 @@ export default function ClipPage() {
     playerApiRef.current?.seekTo(t);
   };
 
+  const parseTimeInput = (val: string): number => {
+    const parts = val.split(':').map(Number);
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    if (parts.length === 1) return parts[0];
+    return 0;
+  };
+
   const addBegin = () => {
     setPendingStart(currentTime);
+    setInputStart(formatTime(currentTime));
   };
 
   const addEnd = () => {
-    if (pendingStart === null) return;
-    const start = Math.min(pendingStart, currentTime);
-    const end = Math.max(pendingStart, currentTime);
-    if (end - start < 1) return;
+    setInputEnd(formatTime(currentTime));
+    // If we already have a start (from button or input), add immediately
+    const startSec = pendingStart !== null ? pendingStart : parseTimeInput(inputStart);
+    const endSec = currentTime;
+    if (startSec >= endSec || endSec - startSec < 1) return;
+    const seg: ClipSegment = {
+      id: `${Date.now()}_${Math.random()}`,
+      start: startSec,
+      end: endSec,
+      color: getColor(segments.length),
+      quality: 'default',
+      audioBitrate: 'default',
+      downloadCC: false,
+    };
+    setSegments((prev) => [...prev, seg]);
+    setPendingStart(null);
+    setInputStart('');
+    setInputEnd('');
+  };
+
+  const addFromInputs = () => {
+    const start = parseTimeInput(inputStart);
+    const end = parseTimeInput(inputEnd);
+    if (start >= end || end - start < 1) {
+      alert('End time must be at least 1 second after start time.');
+      return;
+    }
     const seg: ClipSegment = {
       id: `${Date.now()}_${Math.random()}`,
       start,
@@ -89,11 +125,13 @@ export default function ClipPage() {
     };
     setSegments((prev) => [...prev, seg]);
     setPendingStart(null);
+    setInputStart('');
+    setInputEnd('');
   };
 
-  const updateSegment = (id: string, updates: Partial<ClipSegment>) => {
+  const updateSegment = useCallback((id: string, updates: Partial<ClipSegment>) => {
     setSegments((prev) => prev.map((s) => (s.id === id ? { ...s, ...updates } : s)));
-  };
+  }, []);
 
   const removeSegment = (id: string) => {
     setSegments((prev) => prev.filter((s) => s.id !== id));
@@ -143,30 +181,97 @@ export default function ClipPage() {
       {videoId && (
         <>
           <YouTubePlayer videoId={videoId} onReady={handleReady} onTimeUpdate={handleTimeUpdate} />
-          <Timeline duration={duration} currentTime={currentTime} segments={segments} pendingStart={pendingStart} onSeek={seekTo} />
+          <Timeline
+            duration={duration}
+            currentTime={currentTime}
+            segments={segments}
+            pendingStart={pendingStart}
+            onSeek={seekTo}
+            onUpdateSegment={updateSegment}
+          />
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-            <button
-              onClick={addBegin}
-              style={{ padding: '8px 14px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer', fontSize: 14 }}
-            >
-              Set Begin ({pendingStart !== null ? formatTime(pendingStart) : 'now'})
-            </button>
-            <button
-              onClick={addEnd}
-              disabled={pendingStart === null}
-              style={{
-                padding: '8px 14px',
-                borderRadius: 6,
-                border: 'none',
-                background: pendingStart !== null ? '#111' : '#9ca3af',
-                color: '#fff',
-                cursor: pendingStart !== null ? 'pointer' : 'not-allowed',
-                fontSize: 14,
-              }}
-            >
-              Set End & Add Clip
-            </button>
+          {/* Controls: timestamp inputs + marker buttons */}
+          <div style={{ marginTop: 12, background: '#f9fafb', borderRadius: 8, border: '1px solid #e5e7eb', padding: '12px 14px' }}>
+            {/* Row 1: timestamp inputs + Add button */}
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div>
+                <label style={{ fontSize: 11, color: '#6b7280', display: 'block', marginBottom: 3 }}>Start</label>
+                <input
+                  type="text"
+                  value={inputStart}
+                  onChange={(e) => setInputStart(e.target.value)}
+                  placeholder="00:00:00"
+                  style={{
+                    width: 100,
+                    padding: '7px 10px',
+                    borderRadius: 4,
+                    border: '1px solid #d1d5db',
+                    fontSize: 13,
+                    fontFamily: 'monospace',
+                  }}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: '#6b7280', display: 'block', marginBottom: 3 }}>End</label>
+                <input
+                  type="text"
+                  value={inputEnd}
+                  onChange={(e) => setInputEnd(e.target.value)}
+                  placeholder="00:00:00"
+                  style={{
+                    width: 100,
+                    padding: '7px 10px',
+                    borderRadius: 4,
+                    border: '1px solid #d1d5db',
+                    fontSize: 13,
+                    fontFamily: 'monospace',
+                  }}
+                />
+              </div>
+              <button
+                onClick={addFromInputs}
+                disabled={!inputStart || !inputEnd}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: 6,
+                  border: 'none',
+                  background: inputStart && inputEnd ? '#111' : '#9ca3af',
+                  color: '#fff',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: inputStart && inputEnd ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Add Clip
+              </button>
+            </div>
+
+            {/* Row 2: marker buttons */}
+            <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
+              <span style={{ fontSize: 12, color: '#9ca3af' }}>Or snap to marker:</span>
+              <button
+                onClick={addBegin}
+                style={{ padding: '6px 12px', borderRadius: 4, border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer', fontSize: 12 }}
+              >
+                Set Begin ({formatTime(currentTime)})
+              </button>
+              <button
+                onClick={addEnd}
+                disabled={pendingStart === null && !inputStart}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 4,
+                  border: 'none',
+                  background: pendingStart !== null || inputStart ? '#f59e0b' : '#d1d5db',
+                  color: '#111',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: pendingStart !== null || inputStart ? 'pointer' : 'not-allowed',
+                }}
+              >
+                Set End & Add
+              </button>
+            </div>
           </div>
 
           <ClipQueue segments={segments} onUpdate={updateSegment} onRemove={removeSegment} />

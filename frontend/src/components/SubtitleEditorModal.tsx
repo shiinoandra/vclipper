@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { getWatchUrl } from '../api';
 import { parseSrt, serializeSrt, findActiveCue, type SrtCue } from '../utils/srt';
 import { formatTime, formatDuration } from '../utils/time';
-import { X, Plus, Pencil, Trash2, Sparkles } from 'lucide-react';
+import { X, Pencil, Trash2, Sparkles, Scissors } from 'lucide-react';
 
 interface SubtitleEditorModalProps {
   clipId: number;
@@ -12,22 +12,30 @@ interface SubtitleEditorModalProps {
   onClose: () => void;
 }
 
-/* ─── Helper: Mini Timeline for Add Dialog ─── */
+/* ─── AddTimeline ───
+ * Blue bar  = current playback position marker (dedicated, not draggable)
+ * Yellow    = selected segment range
+ * Drag      = only on segment border handles (col-resize cursor)
+ * Click bg  = seeks video to that time
+ * Buttons   = Set Start / Set End snap segment to blue marker
+ */
 
-function MiniTimeline({
+function AddTimeline({
   duration,
   start,
   end,
   currentTime,
   onChange,
+  onSeek,
 }: {
   duration: number;
   start: number;
   end: number;
   currentTime: number;
   onChange: (start: number, end: number) => void;
+  onSeek: (time: number) => void;
 }) {
-  const [dragging, setDragging] = useState<'start' | 'end' | 'range' | null>(null);
+  const [dragging, setDragging] = useState<'start' | 'end' | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
 
   const getTimeFromX = (clientX: number) => {
@@ -37,18 +45,9 @@ function MiniTimeline({
     return ratio * duration;
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    const t = getTimeFromX(e.clientX);
-    const startDist = Math.abs(t - start);
-    const endDist = Math.abs(t - end);
-
-    if (startDist < endDist) {
-      setDragging('start');
-      onChange(Math.min(t, end), end);
-    } else {
-      setDragging('end');
-      onChange(start, Math.max(t, start));
-    }
+  const startDrag = (handle: 'start' | 'end') => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDragging(handle);
   };
 
   useEffect(() => {
@@ -70,21 +69,48 @@ function MiniTimeline({
     };
   }, [dragging, start, end, duration]);
 
-  const startPct = `${(start / duration) * 100}%`;
-  const endPct = `${(end / duration) * 100}%`;
+  const handleBgClick = (e: React.MouseEvent) => {
+    const t = getTimeFromX(e.clientX);
+    onSeek(t);
+  };
+
+  // Clamp display so end always >= start
+  const displayStart = Math.min(start, end);
+  const displayEnd = Math.max(start, end);
+
+  const startPct = `${(displayStart / duration) * 100}%`;
+  const endPct = `${(displayEnd / duration) * 100}%`;
   const currentPct = `${(currentTime / duration) * 100}%`;
 
   return (
-    <div style={{ marginTop: 8 }}>
+    <div style={{ position: 'relative', paddingTop: 14 }}>
+      {/* Blue triangle seeker handle above bar */}
+      <div
+        style={{
+          position: 'absolute',
+          left: currentPct,
+          top: 0,
+          transform: 'translateX(-50%)',
+          width: 0,
+          height: 0,
+          borderLeft: '7px solid transparent',
+          borderRight: '7px solid transparent',
+          borderTop: '12px solid #3b82f6',
+          zIndex: 3,
+          pointerEvents: 'none',
+        }}
+      />
+
+      {/* Bar background — clicking seeks video */}
       <div
         ref={barRef}
-        onMouseDown={handleMouseDown}
+        onClick={handleBgClick}
         style={{
           position: 'relative',
-          height: 36,
-          background: '#e5e7eb',
-          borderRadius: 6,
-          cursor: 'ew-resize',
+          height: 28,
+          background: '#374151',
+          borderRadius: 4,
+          cursor: 'pointer',
           overflow: 'hidden',
         }}
       >
@@ -93,58 +119,65 @@ function MiniTimeline({
           style={{
             position: 'absolute',
             left: startPct,
-            width: `${((end - start) / duration) * 100}%`,
+            width: `${((displayEnd - displayStart) / duration) * 100}%`,
             top: 0,
             bottom: 0,
-            background: '#fbbf24',
-            opacity: 0.6,
+            background: '#f59e0b',
+            opacity: 0.4,
+            pointerEvents: 'none',
           }}
         />
-        {/* Current time line */}
+        {/* Current time marker (blue) — thicker for visibility */}
         <div
           style={{
             position: 'absolute',
             left: currentPct,
             top: 0,
             bottom: 0,
-            width: 2,
-            background: '#111',
-            transform: 'translateX(-1px)',
+            width: 3,
+            background: '#3b82f6',
+            transform: 'translateX(-1.5px)',
             zIndex: 2,
+            pointerEvents: 'none',
           }}
         />
         {/* Start handle */}
         <div
+          onMouseDown={startDrag('start')}
           style={{
             position: 'absolute',
             left: startPct,
             top: 0,
             bottom: 0,
-            width: 4,
-            background: '#f59e0b',
-            transform: 'translateX(-2px)',
+            width: 8,
+            background: '#fbbf24',
+            transform: 'translateX(-4px)',
             zIndex: 3,
-            cursor: 'ew-resize',
+            cursor: 'col-resize',
           }}
         />
         {/* End handle */}
         <div
+          onMouseDown={startDrag('end')}
           style={{
             position: 'absolute',
             left: endPct,
             top: 0,
             bottom: 0,
-            width: 4,
-            background: '#f59e0b',
-            transform: 'translateX(-2px)',
+            width: 8,
+            background: '#fbbf24',
+            transform: 'translateX(-4px)',
             zIndex: 3,
-            cursor: 'ew-resize',
+            cursor: 'col-resize',
           }}
         />
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#6b7280', marginTop: 4 }}>
-        <span>{formatTime(start)}</span>
-        <span>{formatTime(end)}</span>
+
+      {/* Labels */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+        <span style={{ color: '#fbbf24' }}>{formatTime(start)}</span>
+        <span style={{ color: '#3b82f6', fontWeight: 600 }}>{formatTime(currentTime)}</span>
+        <span style={{ color: '#fbbf24' }}>{formatTime(end)}</span>
       </div>
     </div>
   );
@@ -163,10 +196,11 @@ export default function SubtitleEditorModal({
   const [activeCueId, setActiveCueId] = useState<number | null>(null);
   const [editingCueId, setEditingCueId] = useState<number | null>(null);
   const [editingText, setEditingText] = useState('');
-  const [isAddOpen, setIsAddOpen] = useState(false);
+
   const [addStart, setAddStart] = useState(0);
   const [addEnd, setAddEnd] = useState(3);
   const [addText, setAddText] = useState('');
+
   const [videoDuration, setVideoDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -175,7 +209,6 @@ export default function SubtitleEditorModal({
   const listRef = useRef<HTMLDivElement>(null);
   const activeCardRef = useRef<HTMLDivElement>(null);
 
-  // Sync video time → active cue
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -198,7 +231,6 @@ export default function SubtitleEditorModal({
     return () => video.removeEventListener('timeupdate', onTime);
   }, [handleTimeUpdate]);
 
-  // Scroll active card into view
   useEffect(() => {
     if (activeCardRef.current && listRef.current) {
       activeCardRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -240,19 +272,9 @@ export default function SubtitleEditorModal({
   const deleteCue = (id: number) => {
     setCues((prev) => {
       const filtered = prev.filter((c) => c.id !== id);
-      // Re-number
       filtered.forEach((c, i) => (c.id = i + 1));
       return [...filtered];
     });
-  };
-
-  const openAddDialog = () => {
-    const start = currentTime;
-    const end = Math.min(videoDuration, start + 3);
-    setAddStart(start);
-    setAddEnd(end);
-    setAddText('');
-    setIsAddOpen(true);
   };
 
   const submitAdd = () => {
@@ -267,7 +289,6 @@ export default function SubtitleEditorModal({
     next.sort((a, b) => a.start - b.start);
     next.forEach((c, i) => (c.id = i + 1));
     setCues(next);
-    setIsAddOpen(false);
     setAddText('');
   };
 
@@ -307,7 +328,6 @@ export default function SubtitleEditorModal({
           <span style={{ fontSize: 12, color: '#9ca3af' }}>{title || 'Untitled'}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {/* Whisper stub */}
           <button
             onClick={() => alert('Auto-transcription coming soon!')}
             style={{
@@ -322,7 +342,6 @@ export default function SubtitleEditorModal({
               fontSize: 12,
               cursor: 'pointer',
             }}
-            title="Auto-transcribe with Whisper (coming soon)"
           >
             <Sparkles size={14} />
             Auto-transcribe
@@ -344,13 +363,7 @@ export default function SubtitleEditorModal({
           </button>
           <button
             onClick={onClose}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#fff',
-              cursor: 'pointer',
-              padding: 4,
-            }}
+            style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: 4 }}
           >
             <X size={22} />
           </button>
@@ -372,32 +385,6 @@ export default function SubtitleEditorModal({
             flexDirection: 'column',
           }}
         >
-          {/* Add button */}
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
-            <button
-              onClick={openAddDialog}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                width: '100%',
-                padding: '8px',
-                borderRadius: 6,
-                border: '1px dashed #9ca3af',
-                background: '#fff',
-                color: '#374151',
-                fontSize: 13,
-                fontWeight: 500,
-                cursor: 'pointer',
-              }}
-            >
-              <Plus size={16} />
-              Add Subtitle
-            </button>
-          </div>
-
-          {/* Cue cards */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {cues.map((cue) => {
               const isActive = cue.id === activeCueId;
@@ -416,15 +403,7 @@ export default function SubtitleEditorModal({
                     transition: 'background 0.15s',
                   }}
                 >
-                  {/* Time row */}
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      marginBottom: 4,
-                    }}
-                  >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                     <span style={{ fontSize: 11, color: '#6b7280', fontFamily: 'monospace' }}>
                       #{cue.id} · {formatTime(cue.start)} → {formatTime(cue.end)}
                       {' · '}
@@ -433,33 +412,15 @@ export default function SubtitleEditorModal({
                     {!isEditing && (
                       <div style={{ display: 'flex', gap: 4 }}>
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            startEdit(cue);
-                          }}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            padding: 2,
-                            cursor: 'pointer',
-                            color: '#6b7280',
-                          }}
+                          onClick={(e) => { e.stopPropagation(); startEdit(cue); }}
+                          style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', color: '#6b7280' }}
                           title="Edit"
                         >
                           <Pencil size={13} />
                         </button>
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteCue(cue.id);
-                          }}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            padding: 2,
-                            cursor: 'pointer',
-                            color: '#ef4444',
-                          }}
+                          onClick={(e) => { e.stopPropagation(); deleteCue(cue.id); }}
+                          style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', color: '#ef4444' }}
                           title="Delete"
                         >
                           <Trash2 size={13} />
@@ -468,7 +429,6 @@ export default function SubtitleEditorModal({
                     )}
                   </div>
 
-                  {/* Text */}
                   {isEditing ? (
                     <textarea
                       autoFocus
@@ -493,14 +453,7 @@ export default function SubtitleEditorModal({
                       }}
                     />
                   ) : (
-                    <div
-                      style={{
-                        fontSize: 13,
-                        color: '#111',
-                        lineHeight: 1.4,
-                        whiteSpace: 'pre-wrap',
-                      }}
-                    >
+                    <div style={{ fontSize: 13, color: '#111', lineHeight: 1.4, whiteSpace: 'pre-wrap' }}>
                       {cue.text || <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Empty subtitle</span>}
                     </div>
                   )}
@@ -511,13 +464,13 @@ export default function SubtitleEditorModal({
             {cues.length === 0 && (
               <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>
                 No subtitles yet.<br />
-                Click "Add Subtitle" to create one.
+                Use the form below the video to add one.
               </div>
             )}
           </div>
         </div>
 
-        {/* Right pane: video + overlay */}
+        {/* Right pane: video + bottom bars (shared alignment) */}
         <div
           style={{
             flex: 1,
@@ -525,6 +478,7 @@ export default function SubtitleEditorModal({
             display: 'flex',
             flexDirection: 'column',
             position: 'relative',
+            overflow: 'hidden',
           }}
         >
           {/* Video */}
@@ -536,20 +490,20 @@ export default function SubtitleEditorModal({
               justifyContent: 'center',
               position: 'relative',
               overflow: 'hidden',
+              minHeight: 0,
             }}
             onClick={handlePlayPause}
           >
             <video
               ref={videoRef}
               src={getWatchUrl(clipId)}
-              style={{
-                maxWidth: '100%',
-                maxHeight: '100%',
-                display: 'block',
-              }}
+              style={{ maxWidth: '100%', maxHeight: '100%', display: 'block' }}
               onLoadedMetadata={() => {
                 if (videoRef.current) {
-                  setVideoDuration(videoRef.current.duration);
+                  const dur = videoRef.current.duration;
+                  setVideoDuration(dur);
+                  setAddStart(0);
+                  setAddEnd(Math.min(3, dur));
                 }
               }}
               onPlay={() => setIsPlaying(true)}
@@ -619,206 +573,238 @@ export default function SubtitleEditorModal({
             )}
           </div>
 
-          {/* Bottom controls */}
-          <div
-            style={{
-              background: '#1f2937',
-              padding: '10px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              flexShrink: 0,
-            }}
-          >
-            <button
-              onClick={handlePlayPause}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: '#fff',
-                cursor: 'pointer',
-                padding: 4,
-              }}
-            >
-              {isPlaying ? (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                  <rect x="6" y="4" width="4" height="16" />
-                  <rect x="14" y="4" width="4" height="16" />
-                </svg>
-              ) : (
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                  <polygon points="8,5 8,19 19,12" />
-                </svg>
-              )}
-            </button>
-            <span style={{ fontSize: 12, color: '#d1d5db', fontFamily: 'monospace', minWidth: 80 }}>
-              {formatTime(currentTime)} / {formatTime(videoDuration)}
-            </span>
-            {/* Seek bar */}
-            <div
-              style={{ flex: 1, position: 'relative', height: 6, background: '#4b5563', borderRadius: 3, cursor: 'pointer' }}
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                const ratio = (e.clientX - rect.left) / rect.width;
-                handleSeek(ratio * videoDuration);
-              }}
-            >
+          {/* ── Shared bottom area (controls + add form) ── */}
+          <div style={{ background: '#1f2937', flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+            {/* Shared flex row: left column (controls) + right column (bars) */}
+            <div style={{ display: 'flex', alignItems: 'stretch' }}>
+              {/* Left column: play + timestamp (shared width) */}
               <div
                 style={{
-                  position: 'absolute',
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: `${videoDuration ? (currentTime / videoDuration) * 100 : 0}%`,
-                  background: '#3b82f6',
-                  borderRadius: 3,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '10px 0 10px 16px',
+                  flexShrink: 0,
                 }}
-              />
+              >
+                <button
+                  onClick={handlePlayPause}
+                  style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: 4 }}
+                >
+                  {isPlaying ? (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="6" y="4" width="4" height="16" />
+                      <rect x="14" y="4" width="4" height="16" />
+                    </svg>
+                  ) : (
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                      <polygon points="8,5 8,19 19,12" />
+                    </svg>
+                  )}
+                </button>
+                <span style={{ fontSize: 12, color: '#d1d5db', fontFamily: 'monospace', minWidth: 80 }}>
+                  {formatTime(currentTime)} / {formatTime(videoDuration)}
+                </span>
+              </div>
+
+              {/* Right column: both bars stacked, perfectly aligned */}
+              <div
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'center',
+                  padding: '10px 16px 10px 12px',
+                  gap: 10,
+                }}
+              >
+                {/* Video seek bar */}
+                <div
+                  style={{ position: 'relative', height: 6, background: '#4b5563', borderRadius: 3, cursor: 'pointer' }}
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const ratio = (e.clientX - rect.left) / rect.width;
+                    handleSeek(ratio * videoDuration);
+                  }}
+                >
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      width: `${videoDuration ? (currentTime / videoDuration) * 100 : 0}%`,
+                      background: '#3b82f6',
+                      borderRadius: 3,
+                    }}
+                  />
+                </div>
+
+                {/* Add timeline — shares exact left edge with video seek bar */}
+                <AddTimeline
+                  duration={videoDuration || 1}
+                  start={addStart}
+                  end={addEnd}
+                  currentTime={currentTime}
+                  onChange={(s, e) => {
+                    setAddStart(s);
+                    setAddEnd(e);
+                  }}
+                  onSeek={handleSeek}
+                />
+              </div>
             </div>
-          </div>
-        </div>
-      </div>
 
-      {/* Add Subtitle Dialog overlay */}
-      {isAddOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            zIndex: 300,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 24,
-          }}
-          onClick={() => setIsAddOpen(false)}
-        >
-          <div
-            style={{
-              background: '#fff',
-              borderRadius: 12,
-              maxWidth: 560,
-              width: '100%',
-              padding: 24,
-              boxShadow: '0 20px 50px rgba(0,0,0,0.3)',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 style={{ margin: '0 0 16px', fontSize: 16 }}>Add Subtitle</h3>
-
-            {/* Mini timeline */}
-            <MiniTimeline
-              duration={videoDuration || 1}
-              start={addStart}
-              end={addEnd}
-              currentTime={currentTime}
-              onChange={(s, e) => {
-                setAddStart(s);
-                setAddEnd(e);
+            {/* Inline Add Form */}
+            <div
+              style={{
+                borderTop: '1px solid #374151',
+                padding: '10px 16px 12px',
+                display: 'flex',
+                gap: 10,
+                alignItems: 'flex-start',
               }}
-            />
-
-            {/* Time inputs */}
-            <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: '#6b7280', display: 'block', marginBottom: 4 }}>Start</label>
-                <input
-                  type="text"
-                  value={formatTime(addStart)}
-                  onChange={(e) => {
-                    // Simple HH:MM:SS parsing
-                    const parts = e.target.value.split(':').map(Number);
-                    let sec = 0;
-                    if (parts.length === 3) sec = parts[0] * 3600 + parts[1] * 60 + parts[2];
-                    else if (parts.length === 2) sec = parts[0] * 60 + parts[1];
-                    else if (parts.length === 1) sec = parts[0];
-                    setAddStart(Math.max(0, Math.min(sec, addEnd - 0.5)));
-                  }}
+            >
+              {/* Set Start / Set End buttons */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0, paddingTop: 2 }}>
+                <button
+                  onClick={() => setAddStart(currentTime)}
+                  title="Set segment start to current playback position"
                   style={{
-                    width: '100%',
-                    padding: '6px 8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '5px 10px',
                     borderRadius: 4,
-                    border: '1px solid #d1d5db',
-                    fontSize: 13,
-                    fontFamily: 'monospace',
+                    border: '1px solid #4b5563',
+                    background: '#1f2937',
+                    color: '#fbbf24',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
                   }}
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 11, color: '#6b7280', display: 'block', marginBottom: 4 }}>End</label>
-                <input
-                  type="text"
-                  value={formatTime(addEnd)}
-                  onChange={(e) => {
-                    const parts = e.target.value.split(':').map(Number);
-                    let sec = 0;
-                    if (parts.length === 3) sec = parts[0] * 3600 + parts[1] * 60 + parts[2];
-                    else if (parts.length === 2) sec = parts[0] * 60 + parts[1];
-                    else if (parts.length === 1) sec = parts[0];
-                    setAddEnd(Math.max(addStart + 0.5, Math.min(sec, videoDuration || sec)));
-                  }}
+                >
+                  <Scissors size={12} />
+                  Set Start
+                </button>
+                <button
+                  onClick={() => setAddEnd(Math.max(currentTime, addStart + 0.5))}
+                  title="Set segment end to current playback position"
                   style={{
-                    width: '100%',
-                    padding: '6px 8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '5px 10px',
                     borderRadius: 4,
-                    border: '1px solid #d1d5db',
-                    fontSize: 13,
-                    fontFamily: 'monospace',
+                    border: '1px solid #4b5563',
+                    background: '#1f2937',
+                    color: '#fbbf24',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
                   }}
-                />
+                >
+                  <Scissors size={12} />
+                  Set End
+                </button>
               </div>
-            </div>
 
-            {/* Text input */}
-            <div style={{ marginTop: 12 }}>
-              <label style={{ fontSize: 11, color: '#6b7280', display: 'block', marginBottom: 4 }}>Subtitle Text</label>
+              {/* Time inputs */}
+              <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                <div>
+                  <label style={{ fontSize: 10, color: '#9ca3af', display: 'block', marginBottom: 2 }}>Start</label>
+                  <input
+                    type="text"
+                    value={formatTime(addStart)}
+                    onChange={(e) => {
+                      const parts = e.target.value.split(':').map(Number);
+                      let sec = 0;
+                      if (parts.length === 3) sec = parts[0] * 3600 + parts[1] * 60 + parts[2];
+                      else if (parts.length === 2) sec = parts[0] * 60 + parts[1];
+                      else if (parts.length === 1) sec = parts[0];
+                      setAddStart(Math.max(0, Math.min(sec, addEnd - 0.5)));
+                    }}
+                    style={{
+                      width: 90,
+                      padding: '6px 8px',
+                      borderRadius: 4,
+                      border: '1px solid #4b5563',
+                      background: '#111827',
+                      color: '#fff',
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 10, color: '#9ca3af', display: 'block', marginBottom: 2 }}>End</label>
+                  <input
+                    type="text"
+                    value={formatTime(addEnd)}
+                    onChange={(e) => {
+                      const parts = e.target.value.split(':').map(Number);
+                      let sec = 0;
+                      if (parts.length === 3) sec = parts[0] * 3600 + parts[1] * 60 + parts[2];
+                      else if (parts.length === 2) sec = parts[0] * 60 + parts[1];
+                      else if (parts.length === 1) sec = parts[0];
+                      setAddEnd(Math.max(addStart + 0.5, Math.min(sec, videoDuration || sec)));
+                    }}
+                    onBlur={() => {
+                      // Force minimum 0.5s duration
+                      if (addEnd < addStart + 0.5) {
+                        setAddEnd(addStart + 0.5);
+                      }
+                    }}
+                    style={{
+                      width: 90,
+                      padding: '6px 8px',
+                      borderRadius: 4,
+                      border: '1px solid #4b5563',
+                      background: '#111827',
+                      color: '#fff',
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Text + Add */}
               <textarea
-                autoFocus
                 value={addText}
                 onChange={(e) => setAddText(e.target.value)}
                 placeholder="Enter subtitle text..."
-                rows={3}
+                rows={2}
                 style={{
-                  width: '100%',
+                  flex: 1,
                   padding: '8px 10px',
                   borderRadius: 4,
-                  border: '1px solid #d1d5db',
+                  border: '1px solid #4b5563',
+                  background: '#111827',
+                  color: '#fff',
                   fontSize: 13,
                   resize: 'vertical',
                   fontFamily: 'inherit',
+                  minHeight: 44,
                 }}
               />
-            </div>
 
-            {/* Actions */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
-              <button
-                onClick={() => setIsAddOpen(false)}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: 4,
-                  border: '1px solid #d1d5db',
-                  background: '#fff',
-                  fontSize: 13,
-                  cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
               <button
                 onClick={submitAdd}
                 disabled={!addText.trim()}
                 style={{
-                  padding: '8px 16px',
+                  padding: '8px 18px',
                   borderRadius: 4,
                   border: 'none',
-                  background: '#111',
-                  color: '#fff',
+                  background: addText.trim() ? '#f59e0b' : '#4b5563',
+                  color: '#111',
                   fontSize: 13,
-                  fontWeight: 600,
+                  fontWeight: 700,
                   cursor: addText.trim() ? 'pointer' : 'not-allowed',
                   opacity: addText.trim() ? 1 : 0.5,
+                  flexShrink: 0,
+                  alignSelf: 'flex-start',
+                  marginTop: 16,
                 }}
               >
                 Add
@@ -826,7 +812,7 @@ export default function SubtitleEditorModal({
             </div>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
