@@ -71,3 +71,21 @@ export interface LiveStreamGroup {
   date: string;
   streams: LiveStream[];
 }
+
+export interface StreamSummary {
+  id?: number;
+  video_id: string;
+  summary_text?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface StreamMoment {
+  id: number;
+  video_id: string;
+  start_time: number;
+  end_time: number;
+  description?: string;
+  created_at?: string;
+  updated_at?: string;
+}

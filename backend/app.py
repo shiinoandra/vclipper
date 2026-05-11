@@ -6,7 +6,7 @@ import subprocess
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from config import Config
-from models import db, Clip, Setting, TrackedChannel, LiveStream
+from models import db, Clip, Setting, TrackedChannel, LiveStream, StreamSummary, StreamMoment
 
 def create_app():
     app = Flask(__name__)
@@ -1216,10 +1216,15 @@ def list_live_streams():
 
     streams = q.order_by(LiveStream.actual_start.desc().nullsfirst(), LiveStream.scheduled_start.desc().nullsfirst()).all()
 
-    # Group by date (using actual_start or scheduled_start)
+    # Group by date:
+    # - upcoming streams use scheduled_start (the planned go-live date)
+    # - live/ended streams use actual_start (the real start time)
     groups = {}
     for s in streams:
-        dt = s.actual_start or s.scheduled_start
+        if s.status == "upcoming":
+            dt = s.scheduled_start or s.actual_start
+        else:
+            dt = s.actual_start or s.scheduled_start
         if not dt:
             continue
         date_key = dt.strftime("%Y-%m-%d")
@@ -1296,12 +1301,19 @@ def _process_channel_entries(channel, entries):
         scheduled_start = None
 
         ts = entry.get("timestamp")
-        if ts:
-            actual_start = datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
-
         release_ts = entry.get("release_timestamp")
-        if release_ts:
-            scheduled_start = datetime.fromtimestamp(release_ts, tz=timezone.utc).replace(tzinfo=None)
+
+        if status == "upcoming":
+            # For upcoming streams, timestamp is creation time — ignore it.
+            # Use release_timestamp as the scheduled start.
+            if release_ts:
+                scheduled_start = datetime.fromtimestamp(release_ts, tz=timezone.utc).replace(tzinfo=None)
+        else:
+            # For live/ended streams, timestamp is the actual start time.
+            if ts:
+                actual_start = datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
+            if release_ts:
+                scheduled_start = datetime.fromtimestamp(release_ts, tz=timezone.utc).replace(tzinfo=None)
 
         # For ended streams, estimate end time
         if status == "ended" and actual_start:
@@ -1374,6 +1386,78 @@ def _check_channel_uploads(channel):
     except Exception as e:
         print(f"[Poller] /videos failed for {channel.channel_id}: {e}")
 
+
+# ─── Stream Summaries & Moments ───
+
+@app.route("/api/streams/<video_id>/summary", methods=["GET"])
+def get_stream_summary(video_id):
+    summary = StreamSummary.query.filter_by(video_id=video_id).first()
+    if summary:
+        return jsonify(summary.to_dict())
+    # Return empty placeholder
+    return jsonify({"video_id": video_id, "summary_text": ""})
+
+
+@app.route("/api/streams/<video_id>/summary", methods=["PUT"])
+def update_stream_summary(video_id):
+    data = request.get_json() or {}
+    text = data.get("summary_text", "")
+
+    summary = StreamSummary.query.filter_by(video_id=video_id).first()
+    if summary:
+        summary.summary_text = text
+    else:
+        summary = StreamSummary(video_id=video_id, summary_text=text)
+        db.session.add(summary)
+    db.session.commit()
+    return jsonify(summary.to_dict())
+
+
+@app.route("/api/streams/<video_id>/moments", methods=["GET"])
+def list_stream_moments(video_id):
+    moments = StreamMoment.query.filter_by(video_id=video_id).order_by(StreamMoment.start_time).all()
+    return jsonify([m.to_dict() for m in moments])
+
+
+@app.route("/api/streams/<video_id>/moments", methods=["POST"])
+def add_stream_moment(video_id):
+    data = request.get_json() or {}
+    start = data.get("start_time")
+    end = data.get("end_time")
+    desc = data.get("description", "")
+
+    if start is None or end is None:
+        return jsonify({"error": "start_time and end_time are required"}), 400
+
+    try:
+        start = float(start)
+        end = float(end)
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid time values"}), 400
+
+    if end <= start:
+        return jsonify({"error": "end_time must be greater than start_time"}), 400
+
+    moment = StreamMoment(
+        video_id=video_id,
+        start_time=start,
+        end_time=end,
+        description=desc,
+    )
+    db.session.add(moment)
+    db.session.commit()
+    return jsonify(moment.to_dict()), 201
+
+
+@app.route("/api/streams/moments/<int:moment_id>", methods=["DELETE"])
+def delete_stream_moment(moment_id):
+    moment = StreamMoment.query.get_or_404(moment_id)
+    db.session.delete(moment)
+    db.session.commit()
+    return jsonify({"deleted": True})
+
+
+# ─── Poller ───
 
 def _start_live_poller():
     global _live_poller_thread

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listLiveStreams, listChannels } from '../api';
+import StreamSummaryModal from '../components/StreamSummaryModal';
 import type { LiveStreamGroup, LiveStream, TrackedChannel } from '../types';
 
 function formatDateHeader(dateStr: string): string {
@@ -30,7 +31,7 @@ function formatStreamTime(iso: string | undefined): string {
 
 const STREAMS_PER_PAGE = 12;
 
-function StreamCard({ stream }: { stream: LiveStream }) {
+function StreamCard({ stream, onOpenSummary }: { stream: LiveStream; onOpenSummary: (s: LiveStream) => void }) {
   const navigate = useNavigate();
 
   const handleClip = () => {
@@ -54,7 +55,7 @@ function StreamCard({ stream }: { stream: LiveStream }) {
         flexDirection: 'column',
       }}
     >
-      {/* Header row: LIVE badge + time */}
+      {/* Header row: LIVE badge + time + title */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px' }}>
         {isLive && (
           <span
@@ -72,17 +73,38 @@ function StreamCard({ stream }: { stream: LiveStream }) {
             LIVE
           </span>
         )}
-        <span style={{ fontSize: 13, fontWeight: 600, color: '#111' }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#111', flexShrink: 0 }}>
           {formatStreamTime(stream.actual_start || stream.scheduled_start)}
+        </span>
+        <span
+          style={{
+            fontSize: 12,
+            color: '#374151',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            minWidth: 0,
+            flex: 1,
+          }}
+          title={stream.title || 'Untitled'}
+        >
+          {stream.title || 'Untitled'}
         </span>
       </div>
 
-      {/* Thumbnail — links to original YouTube video */}
-      <a
-        href={stream.video_url || '#'}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{ display: 'block', position: 'relative', width: '100%', aspectRatio: '16/9', background: '#000' }}
+      {/* Thumbnail — opens summary modal */}
+      <button
+        onClick={() => onOpenSummary(stream)}
+        style={{
+          display: 'block',
+          position: 'relative',
+          width: '100%',
+          aspectRatio: '16/9',
+          background: '#000',
+          border: 'none',
+          padding: 0,
+          cursor: 'pointer',
+        }}
       >
         {stream.thumbnail_url ? (
           <img
@@ -95,7 +117,7 @@ function StreamCard({ stream }: { stream: LiveStream }) {
             No thumbnail
           </div>
         )}
-      </a>
+      </button>
 
       {/* Footer row 1: avatar + channel name (truncated) */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px 4px' }}>
@@ -149,7 +171,7 @@ function StreamCard({ stream }: { stream: LiveStream }) {
   );
 }
 
-function PaginatedStreamGrid({ streams }: { streams: LiveStream[] }) {
+function PaginatedStreamGrid({ streams, onOpenSummary }: { streams: LiveStream[]; onOpenSummary: (s: LiveStream) => void }) {
   const [page, setPage] = useState(0);
   const totalPages = Math.ceil(streams.length / STREAMS_PER_PAGE);
 
@@ -169,7 +191,7 @@ function PaginatedStreamGrid({ streams }: { streams: LiveStream[] }) {
         }}
       >
         {paginated.map((stream) => (
-          <StreamCard key={stream.video_id} stream={stream} />
+          <StreamCard key={stream.video_id} stream={stream} onOpenSummary={onOpenSummary} />
         ))}
       </div>
 
@@ -237,6 +259,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [availableTags, setAvailableTags] = useState<string[]>([]);
   const [selectedTag, setSelectedTag] = useState<string>('');
+  const [summaryStream, setSummaryStream] = useState<LiveStream | null>(null);
 
   const load = async (tag?: string) => {
     try {
@@ -337,10 +360,17 @@ export default function HomePage() {
                 {formatDateHeader(group.date)}
               </div>
 
-              <PaginatedStreamGrid streams={group.streams} />
+              <PaginatedStreamGrid streams={group.streams} onOpenSummary={setSummaryStream} />
             </div>
           ))}
         </div>
+      )}
+
+      {summaryStream && (
+        <StreamSummaryModal
+          stream={summaryStream}
+          onClose={() => setSummaryStream(null)}
+        />
       )}
     </div>
   );

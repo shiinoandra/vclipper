@@ -1,4 +1,4 @@
-import type { Clip, Settings, TrackedChannel, LiveStreamGroup } from './types';
+import type { Clip, Settings, TrackedChannel, LiveStreamGroup, StreamSummary, StreamMoment } from './types';
 
 const API_BASE = '/api';
 
@@ -139,4 +139,37 @@ export async function transcribeClip(
     throw new Error(err || res.statusText);
   }
   return res.json();
+}
+
+// ─── Stream Summaries ───
+
+export async function getStreamSummary(videoId: string): Promise<StreamSummary> {
+  return fetchJson<StreamSummary>(`${API_BASE}/streams/${encodeURIComponent(videoId)}/summary`);
+}
+
+export async function updateStreamSummary(videoId: string, summaryText: string): Promise<StreamSummary> {
+  return fetchJson<StreamSummary>(`${API_BASE}/streams/${encodeURIComponent(videoId)}/summary`, {
+    method: 'PUT',
+    body: JSON.stringify({ summary_text: summaryText }),
+  });
+}
+
+// ─── Stream Moments ───
+
+export async function listStreamMoments(videoId: string): Promise<StreamMoment[]> {
+  return fetchJson<StreamMoment[]>(`${API_BASE}/streams/${encodeURIComponent(videoId)}/moments`);
+}
+
+export async function addStreamMoment(
+  videoId: string,
+  moment: Omit<StreamMoment, 'id' | 'video_id' | 'created_at' | 'updated_at'>
+): Promise<StreamMoment> {
+  return fetchJson<StreamMoment>(`${API_BASE}/streams/${encodeURIComponent(videoId)}/moments`, {
+    method: 'POST',
+    body: JSON.stringify(moment),
+  });
+}
+
+export async function deleteStreamMoment(momentId: number): Promise<void> {
+  await fetch(`${API_BASE}/streams/moments/${momentId}`, { method: 'DELETE' });
 }

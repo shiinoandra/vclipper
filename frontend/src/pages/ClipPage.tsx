@@ -38,6 +38,30 @@ export default function ClipPage() {
       setPendingStart(null);
       setInputStart('');
       setInputEnd('');
+
+      // Check for pending segments from StreamSummaryModal
+      try {
+        const raw = localStorage.getItem('vclipper_pending_segments');
+        if (raw) {
+          const pending = JSON.parse(raw);
+          if (pending.videoUrl === url && pending.segments.length > 0) {
+            const imported = pending.segments.map((s: any, idx: number) => ({
+              id: `${Date.now()}_${idx}_${Math.random()}`,
+              start: s.start,
+              end: s.end,
+              color: getColor(idx),
+              quality: 'default',
+              audioBitrate: 'default',
+              downloadCC: false,
+            }));
+            setSegments(imported);
+            // Clear pending after importing
+            localStorage.removeItem('vclipper_pending_segments');
+          }
+        }
+      } catch {
+        // ignore
+      }
     }
   }, [url]);
 
